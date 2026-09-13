@@ -1,0 +1,88 @@
+# XcodeGen spec for WhatsAppWork.app
+# Generate with:  xcodegen generate
+# Requires Xcode 16.2 (macOS 14.5+). See docs/architecture.md §6 for the
+# sidecar lifecycle contract the Swift side implements.
+name: WhatsAppWork
+options:
+  bundleIdPrefix: dev.whatsappwork
+  deploymentTarget:
+    macOS: "14.5"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.5"
+    PRODUCT_BUNDLE_IDENTIFIER: dev.whatsappwork.WhatsAppWork
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: true
+    DEVELOPMENT_ASSET_PATHS: ""
+targets:
+  WhatsAppWork:
+    type: application
+    platform: macOS
+    sources:
+      - path: WhatsAppWork
+      - path: WhatsAppWork/Resources/AppIcon.icns
+        buildPhase: resources
+    settings:
+      base:
+        INFOPLIST_FILE: WhatsAppWork/Info.plist
+        PRODUCT_NAME: WhatsApp Work
+        EXECUTABLE_NAME: WhatsAppWork
+        PRODUCT_MODULE_NAME: WhatsAppWork
+        CODE_SIGN_STYLE: Automatic
+    dependencies: []
+    postBuildScripts:
+      - name: Bundle Go Core
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(SRCROOT)/../../dist/whatsapp-core
+          # Re-run after a Swift relink because this phase also signs the app.
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/MacOS/whatsapp-core
+        # Copies the universal sidecar built by scripts/build-core.sh into the
+        # app, then adhoc-signs every nested Mach-O (incl. the Debug
+        # injection dylib) and re-signs the bundle so codesign stays valid.
+        script: |
+          set -e
+          CORE="$SRCROOT/../../dist/whatsapp-core"
+          APP="$CODESIGNING_FOLDER_PATH"
+          TEST_BUNDLE="$APP/Contents/PlugIns/WhatsAppWorkTests.xctest"
+          if [ ! -x "$CORE" ]; then
+            echo "warning: $CORE missing — run scripts/build-core.sh; app will not find its sidecar"
+            exit 0
+          fi
+          install -m 0755 "$CORE" "$APP/Contents/MacOS/whatsapp-core"
+          for f in "$APP/Contents/MacOS/"*; do
+            /usr/bin/codesign --force --sign - --timestamp=none "$f" 2>/dev/null || true
+          done
+          if [ ! -d "$TEST_BUNDLE" ] || [ -f "$TEST_BUNDLE/Contents/Info.plist" ]; then
+            /usr/bin/codesign --force --sign - --timestamp=none "$APP"
+          fi
+          echo "bundled whatsapp-core into $APP"
+  WhatsAppWorkTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: WhatsAppWorkTests
+    dependencies:
+      - target: WhatsAppWork
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WhatsApp Work.app/Contents/MacOS/WhatsAppWork"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  WhatsAppWork:
+    build:
+      targets:
+        WhatsAppWork: all
+        WhatsAppWorkTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - WhatsAppWorkTests

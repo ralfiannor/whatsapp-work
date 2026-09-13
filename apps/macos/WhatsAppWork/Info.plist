@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleName</key>
+	<string>WhatsApp Work</string>
+	<key>CFBundleDisplayName</key>
+	<string>WhatsApp Work</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.5</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<!-- Local network is not needed: IPC is loopback-only. -->
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Notifies you about work messages.</string>
+	<!-- wa.me handling: the wa.me "Continue to Chat" button invokes the
+	     whatsapp:// custom scheme; registering it (plus our own
+	     whatsappwork:// scheme) routes those links into this app, the same
+	     mechanism WhatsApp Desktop uses. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.whatsappwork.wa-link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>whatsapp</string>
+				<string>whatsappwork</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
