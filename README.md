@@ -170,7 +170,8 @@ principle, no automation or bulk sending.
 
 PRs welcome: small, self-contained, conventional commits. Performance
 changes must cite before/after numbers. Start with
-[AGENTS.md](AGENTS.md) and the docs in `docs/`.
+[AGENTS.md](AGENTS.md) and the docs in `docs/`. By participating you
+agree to uphold the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

@@ -3,6 +3,8 @@
 Thanks for considering it. This is a small, opinionated codebase —
 read [AGENTS.md](AGENTS.md) first; it is the working agreement for humans
 and agents alike and encodes decisions that are easy to get wrong.
+By participating in this project you agree to uphold the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Ground rules
 
