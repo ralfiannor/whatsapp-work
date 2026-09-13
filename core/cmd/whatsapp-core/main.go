@@ -36,7 +36,7 @@ import (
 	"github.com/ralfiannor/whatsapp-work/internal/whatsapp"
 )
 
-const version = "0.1.0-m0"
+const version = "0.1.0"
 
 func main() {
 	// Owner-only files regardless of inherited umask: the data dir holds

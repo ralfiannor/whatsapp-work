@@ -116,8 +116,10 @@ Working agreements, invariants and gotchas live in
 ## Status & roadmap
 
 Early (0.x), daily-driven on a real account. The IPC contract may break
-until 1.0 — `/healthz` reports the version. Full milestone detail:
-[docs/roadmap.md](docs/roadmap.md) · audit:
+until 1.0 — `/healthz` reports the version. Releases ship a universal
+DMG under [Releases](https://github.com/ralfiannor/whatsapp-work/releases);
+changes are tracked in the [changelog](CHANGELOG.md). Full milestone
+detail: [docs/roadmap.md](docs/roadmap.md) · audit:
 [docs/feature-audit-2026-08-30.md](docs/feature-audit-2026-08-30.md).
 
 ### Working today
