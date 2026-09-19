@@ -643,8 +643,8 @@ struct ComposerBar: View {
     @EnvironmentObject var state: AppState
     @State private var draft = ""
     @State private var fieldFocused = false
-    /// Picked-but-not-sent image. Two-step attach: paperclip only picks,
-    /// the user types a caption, ⌘Enter / send ships them together.
+    /// Picked-but-not-sent file. Two-step attach: paperclip only picks,
+    /// the user types a caption, Enter / send ships them together.
     @State private var attachmentURL: URL?
     @StateObject private var mediaSubmitAction = ComposerMediaSubmitAction()
     @State private var mentionMembers: [APIClient.GroupMember] = []
@@ -807,7 +807,7 @@ struct ComposerBar: View {
 
     /// Two-step attach: the panel only PICKS (any file — documents, video,
     /// audio, images; the core maps the MIME to the right WhatsApp kind).
-    /// Caption is typed afterwards in the normal composer; ⌘Enter (or the
+    /// Caption is typed afterwards in the normal composer; Enter (or the
     /// plane) ships file + text together.
     private func pickFile() {
         let panel = NSOpenPanel()
@@ -869,8 +869,8 @@ struct ComposerBar: View {
         }
     }
 
-    /// Popup: click a row, Tab accepts the first (multiline composer means
-    /// Return inserts a newline), Esc dismisses.
+    /// Popup: click a row, Tab or Return accepts the first match, Esc
+    /// dismisses (Return is intercepted while the popup is open).
     private var mentionPopup: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(mentionSuggestions.enumerated()), id: \.element.jid) { idx, m in

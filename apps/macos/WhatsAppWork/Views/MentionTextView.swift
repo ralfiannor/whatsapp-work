@@ -150,12 +150,15 @@ struct MentionTextView: NSViewRepresentable {
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) {
                 if parent.enterInterceptor() { return true }
-                let mods = NSApp.currentEvent?.modifierFlags ?? []
-                if mods.contains(.command) {
-                    parent.onEnter()
-                    return true
+                // Plain Return sends (old TextField onSubmit behavior);
+                // ⌘/⌥ Return falls through and inserts a newline.
+                let mods = NSApp.currentEvent?.modifierFlags
+                    .intersection(.deviceIndependentFlagsMask) ?? []
+                if mods.contains(.command) || mods.contains(.option) {
+                    return false
                 }
-                return false // plain Return inserts a newline (current behavior)
+                parent.onEnter()
+                return true
             }
             return false
         }
@@ -182,16 +185,26 @@ struct MentionTextView: NSViewRepresentable {
 final class ComposerTextView: NSTextView {
     var onFocus: ((Bool) -> Void)?
 
-    /// ⌘A: the SwiftUI-hosted text view is not always on the replaced-menu
-    /// responder path — consume the key equivalent directly so Select All
-    /// always works while composing.
+    /// ⌘A and ⌘/⌥ Return are handled here because key equivalents dispatch
+    /// BEFORE keyDown: the send button owns the ⌘Return key equivalent, so
+    /// without this a modified Return while composing would trigger the
+    /// button (send) instead of inserting a newline. The SwiftUI-hosted
+    /// text view is also not reliably on the replaced-menu responder path
+    /// for ⌘A.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder == self else {
+            return super.performKeyEquivalent(with: event)
+        }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if event.charactersIgnoringModifiers == "a",
-           mods.contains(.command),
-           !mods.contains(.option), !mods.contains(.control), !mods.contains(.shift),
-           window?.firstResponder == self {
+        let key = event.charactersIgnoringModifiers
+        if key == "a", mods.contains(.command),
+           !mods.contains(.option), !mods.contains(.control), !mods.contains(.shift) {
             selectAll(nil)
+            return true
+        }
+        if key == "\r", mods.contains(.command) || mods.contains(.option),
+           !mods.contains(.shift), !mods.contains(.control) {
+            insertNewlineIgnoringFieldEditor(nil)
             return true
         }
         return super.performKeyEquivalent(with: event)
