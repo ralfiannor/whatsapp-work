@@ -1198,9 +1198,25 @@ func (a *App) DeleteMessage(ctx context.Context, rowID int64) error {
 	return nil
 }
 
-// MarkChatRead sends read receipts for unread incoming messages (grouped by
-// sender, as the protocol requires) and clears the chat's counters.
-func (a *App) MarkChatRead(ctx context.Context, chatJID string) error {
+// MarkChatRead clears a chat's unread state. With sendReceipt it first
+// delivers WhatsApp read receipts grouped by sender (on failure the local
+// position is kept so the next attempt retries the same ids); without, it
+// advances the local position only — privacy mode for direct chats.
+func (a *App) MarkChatRead(ctx context.Context, chatJID string, sendReceipt bool) error {
+	if !sendReceipt {
+		maxTS, err := a.store.MaxUnreadIncomingTS(ctx, chatJID)
+		if err != nil {
+			return err
+		}
+		if maxTS == 0 {
+			return nil // nothing unread; counters already consistent
+		}
+		if err := a.store.MarkChatRead(ctx, chatJID, maxTS); err != nil {
+			return err
+		}
+		a.emitChatUpdated(ctx, chatJID)
+		return nil
+	}
 	unread, err := a.store.UnreadIncoming(ctx, chatJID, 200)
 	if err != nil {
 		return err

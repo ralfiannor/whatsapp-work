@@ -347,7 +347,7 @@ func TestMarkChatReadSendsReceipts(t *testing.T) {
 	waitFor(t, sub, "message.received")
 	waitFor(t, sub, "message.received") // both must be durable before reading
 
-	if err := a.MarkChatRead(context.Background(), alice); err != nil {
+	if err := a.MarkChatRead(context.Background(), alice, true); err != nil {
 		t.Fatal(err)
 	}
 	fw.mu.Lock()
@@ -515,5 +515,50 @@ func TestDeleteMessageNotFound(t *testing.T) {
 	a, _, _, _ := newTestApp(t)
 	if err := a.DeleteMessage(context.Background(), 999999); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("want storage.ErrNotFound, got %v", err)
+	}
+}
+
+func TestMarkChatReadLocalOnlyClearsWithoutReceipt(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	fw.push(incomingMsg("m1", alice, alice, "one"))
+	waitFor(t, sub, "message.received")
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 1 {
+		t.Fatalf("unread before = %d", c.UnreadCount)
+	}
+
+	if err := a.MarkChatRead(context.Background(), alice, false); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	if len(fw.marked) != 0 {
+		fw.mu.Unlock()
+		t.Fatalf("local-only read sent receipts: %+v", fw.marked)
+	}
+	fw.mu.Unlock()
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 0 {
+		t.Fatalf("unread after = %d", c.UnreadCount)
+	}
+	waitFor(t, sub, "chat.updated")
+
+	// Traffic after the local read still bumps the badge. The fixture must
+	// arrive past the advanced read position (unread = timestamp > last_read_ts).
+	fw.push(incomingMsgAt("m2", alice, "two", 1700000200))
+	waitFor(t, sub, "message.received")
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 1 {
+		t.Fatalf("unread after new incoming = %d", c.UnreadCount)
+	}
+}
+
+func TestMarkChatReadLocalOnlyNoUnreadIsNoop(t *testing.T) {
+	a, fw, _, _ := newTestApp(t)
+	if err := a.MarkChatRead(context.Background(), alice, false); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.marked) != 0 {
+		t.Fatalf("noop read sent receipts: %+v", fw.marked)
 	}
 }

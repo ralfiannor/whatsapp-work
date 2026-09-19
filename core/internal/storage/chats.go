@@ -353,6 +353,19 @@ func (s *Store) UnreadIncoming(ctx context.Context, jid string, limit int) ([]Un
 	return out, rows.Err()
 }
 
+// MaxUnreadIncomingTS is the newest unread incoming timestamp (0 = none).
+func (s *Store) MaxUnreadIncomingTS(ctx context.Context, jid string) (int64, error) {
+	var ts sql.NullInt64
+	if err := s.r.QueryRowContext(ctx, `
+		SELECT MAX(timestamp) FROM messages
+		WHERE chat_jid = ? AND from_me = 0 AND revoked = 0
+		  AND timestamp > (SELECT COALESCE(last_read_ts, 0) FROM chats WHERE jid = ?)`,
+		jid, jid).Scan(&ts); err != nil {
+		return 0, fmt.Errorf("storage: max unread ts: %w", err)
+	}
+	return ts.Int64, nil
+}
+
 // SetOwnJID records the logged-in account.
 func (s *Store) SetOwnJID(ctx context.Context, jid string) error {
 	_, err := s.w.ExecContext(ctx, `

@@ -272,7 +272,8 @@ func (s *Server) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChatRead(w http.ResponseWriter, r *http.Request) {
-	if err := s.api.MarkChatRead(r.Context(), r.PathValue("jid")); err != nil {
+	// TODO: accept a send-receipts flag so callers can pick local-only mode.
+	if err := s.api.MarkChatRead(r.Context(), r.PathValue("jid"), true); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
