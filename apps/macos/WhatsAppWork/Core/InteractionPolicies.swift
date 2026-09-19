@@ -15,6 +15,7 @@ enum PasteRoutingPolicy {
 
 enum ChatOpenSource: CaseIterable {
     case keyboardSelection, enter, mouse, transcriptFocus, composerFocus
+    case selectionChange
     case search, inbox, notification, deepLink
 
     var acknowledgesRead: Bool { self != .keyboardSelection }

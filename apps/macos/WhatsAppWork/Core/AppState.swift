@@ -37,6 +37,15 @@ final class AppState: ObservableObject {
             enforceTranscriptRetention()
         }
     }
+    /// Marks exactly one upcoming selection-change observation as j/k-style
+    /// preview browsing so the List observer skips the read commit.
+    private var selectionBrowsing = false
+    func markSelectionBrowsing() { selectionBrowsing = true }
+    func consumeSelectionBrowsing() -> Bool {
+        let browsing = selectionBrowsing
+        selectionBrowsing = false
+        return browsing
+    }
     @Published var messagesByChat: [String: [Message]] = [:]
     /// Advances only after the selected chat's newly fetched page has decoded
     /// and merged. TranscriptView uses it to avoid treating cached rows that
@@ -1545,6 +1554,7 @@ final class AppState: ObservableObject {
             pendingAnchor = nil
         }
         switchOpenedChat(to: chat)
+        markSelectionBrowsing()
         selectedChat = chat
         await loadPreview(request)
     }
