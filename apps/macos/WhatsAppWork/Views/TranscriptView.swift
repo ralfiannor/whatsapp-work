@@ -639,7 +639,7 @@ struct ComposerBar: View {
     let chatJID: String
     @EnvironmentObject var state: AppState
     @State private var draft = ""
-    @FocusState private var fieldFocused: Bool
+    @State private var fieldFocused = false
     /// Picked-but-not-sent image. Two-step attach: paperclip only picks,
     /// the user types a caption, ⌘Enter / send ships them together.
     @State private var attachmentURL: URL?
@@ -815,11 +815,13 @@ struct ComposerBar: View {
     }
 
     /// Shared attach path for picker and clipboard paste: stage the file and
-    /// drop the caret into the caption field.
+    /// drop the caret into the caption field. Bumping the focus request
+    /// (instead of setting fieldFocused directly) is what actually focuses
+    /// the NSTextView via MentionTextView's focusRequest.
     private func attach(url: URL) {
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
         attachmentURL = url
-        fieldFocused = true
+        state.composerFocusRequest += 1
     }
 
     private func removeAttachment() {
@@ -832,14 +834,25 @@ struct ComposerBar: View {
             if !mentionSuggestions.isEmpty {
                 mentionPopup
             }
-            TextField("Message…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($fieldFocused)
-                .font(.system(size: 12.5, design: .monospaced))
-                .lineLimit(1...5)
-                .padding(6)
-                .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary.opacity(0.35)))
-                .onSubmit { submitFromKeyboard() }
+            MentionTextView(
+                text: $draft,
+                resolvedLabels: Array(state.mentionTargets.values),
+                font: .monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                enterInterceptor: {
+                    // Enter with the popup open accepts the first match.
+                    if let first = mentionSuggestions.first {
+                        acceptMention(first)
+                        return true
+                    }
+                    return false
+                },
+                onEnter: { submitFromKeyboard() },
+                onFocusChange: { fieldFocused = $0 },
+                focusRequest: state.composerFocusRequest
+            )
+            .frame(minHeight: 29, maxHeight: 96)
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary.opacity(0.35)))
         }
     }
 

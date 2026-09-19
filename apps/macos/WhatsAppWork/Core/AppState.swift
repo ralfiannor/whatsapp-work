@@ -1924,19 +1924,7 @@ final class AppState: ObservableObject {
     }
 
     private func containsMentionToken(_ text: String, label: String) -> Bool {
-        var searchStart = text.startIndex
-        while let r = text.range(of: "@\(label)", range: searchStart..<text.endIndex) {
-            let afterOK = r.upperBound == text.endIndex ||
-                          !isWordChar(text[r.upperBound])
-            // `index(before:)` is only valid when the match is NOT at the
-            // string's start — evaluating it eagerly crashed (SIGILL in
-            // Release) on drafts that open with "@name …".
-            let beforeOK = r.lowerBound == text.startIndex
-                || !isWordChar(text[text.index(before: r.lowerBound)])
-            if afterOK && beforeOK { return true }
-            searchStart = r.upperBound
-        }
-        return false
+        !MentionTokenMatcher.matchedRanges(text: text, labels: [label]).isEmpty
     }
 
     private func isWordChar(_ c: Character) -> Bool {
