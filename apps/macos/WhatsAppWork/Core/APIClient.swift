@@ -639,8 +639,10 @@ actor APIClient {
         return try JSONDecoder().decode(Message.self, from: data)
     }
 
-    func markRead(chat: String) async throws {
-        _ = try await request("POST", "chats/\(chat)/read")
+    func markRead(chat: String, sendReceipt: Bool = true) async throws {
+        var q = [URLQueryItem]()
+        if !sendReceipt { q.append(URLQueryItem(name: "send_receipt", value: "false")) }
+        _ = try await request("POST", url("chats/\(chat)/read", q).absoluteString)
     }
 
     func react(rowID: Int64, emoji: String) async throws {

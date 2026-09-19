@@ -391,7 +391,7 @@ final class AppRuntimeClient {
     private let logoutOperation: @MainActor () async throws -> Void
     private let messagesOperation: @MainActor (String) async throws -> MessagesResponse
     private let sendTextOperation: SendText
-    private let markReadOperation: @MainActor (String) async throws -> Void
+    private let markReadOperation: @MainActor (String, Bool) async throws -> Void
     private let sendMediaOperation: SendMedia
     private let connectEventsOperation: ConnectEvents
     private let disconnectEventsOperation: @MainActor () async -> Void
@@ -407,7 +407,7 @@ final class AppRuntimeClient {
         sendText: @escaping SendText = { _, _, _, _ in
             throw URLError(.unsupportedURL)
         },
-        markRead: @escaping @MainActor (String) async throws -> Void = { _ in
+        markRead: @escaping @MainActor (String, Bool) async throws -> Void = { _, _ in
             throw URLError(.unsupportedURL)
         },
         sendMedia: @escaping SendMedia = { _, _, _, _, _, _ in
@@ -449,7 +449,7 @@ final class AppRuntimeClient {
                     mentionedJids: mentionedJIDs
                 )
             },
-            markRead: { chat in try await api.markRead(chat: chat) },
+            markRead: { chat, sendReceipt in try await api.markRead(chat: chat, sendReceipt: sendReceipt) },
             sendMedia: { chat, data, mime, filename, caption, replyTo in
                 try await api.sendMedia(
                     chat: chat,
@@ -483,7 +483,7 @@ final class AppRuntimeClient {
                   mentionedJIDs: [String]) async throws -> Message {
         try await sendTextOperation(chat, text, replyTo, mentionedJIDs)
     }
-    func markRead(chat: String) async throws { try await markReadOperation(chat) }
+    func markRead(chat: String, sendReceipt: Bool) async throws { try await markReadOperation(chat, sendReceipt) }
     func sendMedia(chat: String, data: Data, mime: String, filename: String,
                    caption: String,
                    replyTo: (id: String, sender: String)?) async throws -> Message {

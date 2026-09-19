@@ -75,6 +75,9 @@ struct WhatsAppWorkApp: App {
                 Button("Log Out (wipes local data)") { Task { await state.logout() } }
             }
         }
+        Settings {
+            SettingsView()
+        }
     }
 }
 

@@ -74,6 +74,9 @@ final class AppState: ObservableObject {
     /// Focus Mode: only work-marked chats (work groups + starred work
     /// contacts) may notify or feed the dock badge; everything else silent.
     @AppStorage("focusMode") var focusMode = false
+    /// Privacy: DM read receipts are suppressed unless the user opts back
+    /// in (Settings ▸ "Don't send read receipts in direct messages").
+    @AppStorage("suppressDMReadReceipts") var suppressDMReadReceipts = true
     /// Message to scroll to once the transcript loads (inbox/search jump).
     /// Chat-scoped: an unresolved anchor must never page history in the
     /// WRONG chat after the user switches before it resolves.
@@ -1652,11 +1655,13 @@ final class AppState: ObservableObject {
             liveUnreadCount: unread,
             messages: messagesByChat[chat] ?? []
         )
+        let sendReceipt = ReadReceiptPolicy.shouldSendReceipt(
+            chatJID: chat, suppressDMReceipts: suppressDMReadReceipts)
         let result = await readCommitAction.commit(
             chatJID: chat,
             source: source,
             fallbackUnreadCount: fallbackUnread,
-            request: { try await client.markRead(chat: chat) },
+            request: { try await client.markRead(chat: chat, sendReceipt: sendReceipt) },
             onSuccess: {
                 if let index = self.chats.firstIndex(where: { $0.jid == chat }) {
                     self.chats[index].unread_count = 0
