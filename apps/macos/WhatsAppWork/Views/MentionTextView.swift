@@ -34,6 +34,13 @@ enum MentionTokenMatcher {
 /// is not one. Resolved "@Label" tokens render in the accent color; any
 /// other "@" text stays default-colored (unresolved, will not be sent as a
 /// mention).
+///
+/// Sizing: a bare, vertically-resizable NSTextView reports an unbounded
+/// fitting size to SwiftUI (the composer once rendered as a giant box), so
+/// the text view lives in an NSScrollView and `sizeThatFits` returns a
+/// content-hugging height clamped to a 1…5-line envelope — the scroll view
+/// scrolls beyond five lines, matching the old TextField's
+/// `lineLimit(1...5)`.
 struct MentionTextView: NSViewRepresentable {
     @Binding var text: String
     var resolvedLabels: [String]
@@ -46,7 +53,15 @@ struct MentionTextView: NSViewRepresentable {
     /// Bump to focus the field (replaces @FocusState bridging).
     var focusRequest: Int
 
-    func makeNSView(context: Context) -> ComposerTextView {
+    /// Height envelope: one line min, ~five lines max (plus the outer
+    /// .padding(6) applied by the composer — totals match the old field).
+    private static let minHeight: CGFloat = 22
+    private static let maxHeight: CGFloat = 84
+    /// TextKit line-fragment padding (5 per side) — stripped from the
+    /// measurement width so wrapping matches the laid-out text.
+    private static let sideInset: CGFloat = 10
+
+    func makeNSView(context: Context) -> NSScrollView {
         let tv = ComposerTextView()
         tv.delegate = context.coordinator
         tv.font = font
@@ -59,8 +74,6 @@ struct MentionTextView: NSViewRepresentable {
         tv.isAutomaticTextReplacementEnabled = false
         tv.isContinuousSpellCheckingEnabled = false
         tv.isGrammarCheckingEnabled = false
-        // Auto-height 1…5 lines: grow with content, cap at 5 lines, scroll
-        // beyond. SwiftUI drives the height from the fitting size.
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]
@@ -73,13 +86,22 @@ struct MentionTextView: NSViewRepresentable {
         Self.recolor(tv, labels: resolvedLabels, font: font)
         context.coordinator.textView = tv
         context.coordinator.parent = self
-        return tv
+
+        let scroll = NSScrollView()
+        scroll.documentView = tv
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.hasHorizontalScroller = false
+        scroll.borderType = .noBorder
+        return scroll
     }
 
-    // Parameter must be the concrete NSViewType (ComposerTextView) to
-    // witness the protocol requirement; a supertype is not a valid witness.
-    func updateNSView(_ tv: ComposerTextView, context: Context) {
+    // Parameter must be the concrete NSViewType (NSScrollView) to witness
+    // the protocol requirement; a supertype is not a valid witness.
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
+        guard let tv = scroll.documentView as? ComposerTextView else { return }
         if !context.coordinator.isEditing, tv.string != text {
             tv.string = text
         }
@@ -89,10 +111,23 @@ struct MentionTextView: NSViewRepresentable {
             context.coordinator.lastFocusRequest = focusRequest
             if let window = tv.window {
                 window.makeFirstResponder(tv)
-            } else {
-                tv.needsDisplay = true // not yet in a window; retry on next update
             }
         }
+    }
+
+    /// Content-hugging height at the proposed width: measure the plain
+    /// one-font text (mention colors never affect metrics) and clamp into
+    /// the 1…5-line envelope. This is what keeps the frame proportional.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.bounds.width
+        guard width.isFinite, width > 0 else { return nil }
+        let attributed = NSAttributedString(
+            string: text.isEmpty ? " " : text, attributes: [.font: font])
+        let bounds = attributed.boundingRect(
+            with: NSSize(width: max(width - Self.sideInset, 1), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let height = min(max(ceil(bounds.height), Self.minHeight), Self.maxHeight)
+        return CGSize(width: width, height: height)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -146,6 +181,21 @@ struct MentionTextView: NSViewRepresentable {
 /// even when focus moves without ending the editing session.
 final class ComposerTextView: NSTextView {
     var onFocus: ((Bool) -> Void)?
+
+    /// ⌘A: the SwiftUI-hosted text view is not always on the replaced-menu
+    /// responder path — consume the key equivalent directly so Select All
+    /// always works while composing.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.charactersIgnoringModifiers == "a",
+           mods.contains(.command),
+           !mods.contains(.option), !mods.contains(.control), !mods.contains(.shift),
+           window?.firstResponder == self {
+            selectAll(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()

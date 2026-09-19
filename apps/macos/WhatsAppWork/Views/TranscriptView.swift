@@ -837,23 +837,33 @@ struct ComposerBar: View {
             if !mentionSuggestions.isEmpty {
                 mentionPopup
             }
-            MentionTextView(
-                text: $draft,
-                resolvedLabels: Array(state.mentionTargets.values),
-                font: .monospacedSystemFont(ofSize: 12.5, weight: .regular),
-                enterInterceptor: {
-                    // Enter with the popup open accepts the first match.
-                    if let first = mentionSuggestions.first {
-                        acceptMention(first)
-                        return true
-                    }
-                    return false
-                },
-                onEnter: { submitFromKeyboard() },
-                onFocusChange: { fieldFocused = $0 },
-                focusRequest: state.composerFocusRequest
-            )
-            .frame(minHeight: 29, maxHeight: 96)
+            ZStack(alignment: .topLeading) {
+                MentionTextView(
+                    text: $draft,
+                    resolvedLabels: Array(state.mentionTargets.values),
+                    font: .monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                    enterInterceptor: {
+                        // Enter with the popup open accepts the first match.
+                        if let first = mentionSuggestions.first {
+                            acceptMention(first)
+                            return true
+                        }
+                        return false
+                    },
+                    onEnter: { submitFromKeyboard() },
+                    onFocusChange: { fieldFocused = $0 },
+                    focusRequest: state.composerFocusRequest
+                )
+                // Placeholder: an NSTextView has none of its own. Offsets
+                // mirror TextKit's line-fragment padding.
+                if draft.isEmpty {
+                    Text("Message…")
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(EdgeInsets(top: 3, leading: 10, bottom: 0, trailing: 10))
+                        .allowsHitTesting(false)
+                }
+            }
             .padding(6)
             .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary.opacity(0.35)))
         }
