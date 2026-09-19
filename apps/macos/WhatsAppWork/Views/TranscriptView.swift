@@ -50,6 +50,20 @@ struct TranscriptView: View {
         // Appearance lives at RootView (app-wide dark); no per-view override.
         .background(Color(white: 0.07))
         .sheet(isPresented: previewBinding) { ImagePreviewSheet() }
+        // Delete confirmation lives OUTSIDE the MessageList Equatable wall:
+        // inside it, deleteTarget changes either skip the list body (alert
+        // never presents) or force the wall to watch all of AppState.
+        .alert("Delete for everyone?", isPresented: Binding(
+            get: { state.deleteTarget != nil },
+            set: { if !$0 { state.deleteTarget = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let m = state.deleteTarget { Task { await state.deleteMessage(m) } }
+                state.deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) { state.deleteTarget = nil }
+        } message: {
+            Text("The message will be removed for everyone in this chat.")
+        }
         .onAppear { recomputeNickColumn() }
         .onChange(of: messages.count) { _, _ in recomputeNickColumn() }
         .onChange(of: state.contactNames) { _, _ in
@@ -304,17 +318,6 @@ private struct MessageList: View, Equatable {
                     ReactionPanel(rowID: id) { reactFor = nil }
                         .padding(12)
                 }
-            }
-            .alert("Delete for everyone?", isPresented: Binding(
-                get: { state.deleteTarget != nil },
-                set: { if !$0 { state.deleteTarget = nil } })) {
-                Button("Delete", role: .destructive) {
-                    if let m = state.deleteTarget { Task { await state.deleteMessage(m) } }
-                    state.deleteTarget = nil
-                }
-                Button("Cancel", role: .cancel) { state.deleteTarget = nil }
-            } message: {
-                Text("The message will be removed for everyone in this chat.")
             }
             // New message while reading at the bottom: snap (no animation —
             // a busy group must not make the transcript swim).
@@ -1216,7 +1219,9 @@ struct MessageBubble: View {
                     NSPasteboard.general.setString(text, forType: .string)
                 }
             }
-            if message.from_me && !message.revoked {
+            // id > 0: optimistic temp rows have negative ids — the server
+            // has no message to revoke, Delete would 404.
+            if message.from_me && !message.revoked && message.id > 0 {
                 Button("Delete…") { state.requestDeleteMessage(message) }
             }
             if message.chat_jid.hasSuffix("@g.us") && !message.from_me {

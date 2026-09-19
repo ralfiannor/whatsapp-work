@@ -1195,6 +1195,9 @@ func (a *App) DeleteMessage(ctx context.Context, rowID int64) error {
 		return fmt.Errorf("app: delete: %w", err)
 	}
 	a.emitMessageUpdated(ctx, m.ChatJID, m.MessageID)
+	// SetRevoked may clear chats.last_preview (deleted row was the newest):
+	// the sidebar needs the refreshed chat row, not just the tombstoned message.
+	a.emitChatUpdated(ctx, m.ChatJID)
 	return nil
 }
 

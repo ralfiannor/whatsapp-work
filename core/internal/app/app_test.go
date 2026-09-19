@@ -443,6 +443,9 @@ func TestDeleteMessageRevokesOwnRow(t *testing.T) {
 	}
 	fw.mu.Unlock()
 	waitFor(t, sub, "message.updated")
+	// Sidebar refresh: SetRevoked cleared last_preview, the chat row event
+	// must reach the client too (message-then-chat, as in SendText).
+	waitFor(t, sub, "chat.updated")
 
 	m, err := st.GetMessage(context.Background(), sent.ID)
 	if err != nil {
