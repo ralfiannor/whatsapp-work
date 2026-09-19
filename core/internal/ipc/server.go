@@ -272,8 +272,16 @@ func (s *Server) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChatRead(w http.ResponseWriter, r *http.Request) {
-	// TODO: accept a send-receipts flag so callers can pick local-only mode.
-	if err := s.api.MarkChatRead(r.Context(), r.PathValue("jid"), true); err != nil {
+	sendReceipt := true
+	if v := r.URL.Query().Get("send_receipt"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", "send_receipt must be a boolean")
+			return
+		}
+		sendReceipt = b
+	}
+	if err := s.api.MarkChatRead(r.Context(), r.PathValue("jid"), sendReceipt); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}

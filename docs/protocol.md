@@ -63,8 +63,10 @@ Keyset pagination: `before` is the cursor from the previous page (first page: om
 `limit` is clamped to 1–199 (the server probes with limit+1 against a 200-row store max).
 
 ```
-POST /chats/{jid}/read
-→ 204        # marks chat read locally + sends WhatsApp read receipt for unread incoming ids
+POST /chats/{jid}/read?send_receipt=true|false
+→ 204        # marks chat read locally + sends the WhatsApp read receipt
+             # for unread incoming ids; send_receipt=false skips the receipt
+             # (privacy mode for direct chats). Default: true.
 ```
 
 ### Messages

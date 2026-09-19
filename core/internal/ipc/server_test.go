@@ -241,6 +241,20 @@ func TestReactAndRead(t *testing.T) {
 	}
 }
 
+func TestChatReadSendReceiptParam(t *testing.T) {
+	e := newEnv(t)
+
+	if code, _ := e.do("POST", "/chats/"+alice+"/read?send_receipt=false", "", true); code != http.StatusNoContent {
+		t.Fatalf("send_receipt=false status = %d", code)
+	}
+	if code, _ := e.do("POST", "/chats/"+alice+"/read", "", true); code != http.StatusNoContent {
+		t.Fatalf("default status = %d", code)
+	}
+	if code, _ := e.do("POST", "/chats/"+alice+"/read?send_receipt=nope", "", true); code != http.StatusBadRequest {
+		t.Fatalf("bad value status = %d", code)
+	}
+}
+
 func TestSearchEndpoint(t *testing.T) {
 	e := newEnv(t)
 	e.post("/messages", fmt.Sprintf(`{"chat_jid":%q,"text":"deployment staging failed"}`, alice))
