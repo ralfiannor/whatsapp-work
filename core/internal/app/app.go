@@ -144,6 +144,10 @@ func (a *App) MediaFileInfo(ctx context.Context, rowID int64) (string, string, e
 
 var errMediaUnavailable = fmt.Errorf("media service unavailable")
 
+// ErrNotOwnMessage rejects delete-for-everyone attempts on rows the
+// account did not send (admin deletes are out of scope).
+var ErrNotOwnMessage = errors.New("app: not an own message")
+
 // Run starts the ingest loop and a slow name-resolution ticker (the LID→PN
 // table refills organically from live traffic; old rows get rewritten as the
 // mapping grows). Returns immediately; loops exit when ctx is cancelled.
@@ -1166,6 +1170,31 @@ func (a *App) React(ctx context.Context, rowID int64, emoji string) error {
 	a.emit("reaction.received", map[string]any{
 		"message_rowid": rowID, "chat_jid": m.ChatJID, "reactor_jid": own, "emoji": emoji,
 	})
+	return nil
+}
+
+// DeleteMessage revokes the caller's own message ("delete for everyone"):
+// send the protocol revoke, then tombstone the local row. Non-own rows are
+// rejected, already-revoked rows are a no-op, and a wire failure leaves the
+// row untouched so the user can retry.
+func (a *App) DeleteMessage(ctx context.Context, rowID int64) error {
+	m, err := a.store.GetMessage(ctx, rowID)
+	if err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	if !m.FromMe {
+		return ErrNotOwnMessage
+	}
+	if m.Revoked {
+		return nil
+	}
+	if err := a.wa.RevokeMessage(ctx, m.ChatJID, m.MessageID); err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	if err := a.store.SetRevoked(ctx, m.ChatJID, m.MessageID, m.SenderJID, m.Timestamp); err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	a.emitMessageUpdated(ctx, m.ChatJID, m.MessageID)
 	return nil
 }
 

@@ -7,8 +7,9 @@
 package app_test
 
 import (
-	"strings"
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -419,5 +420,100 @@ func TestSendMediaPersistsAndEmits(t *testing.T) {
 	}
 	if row.Media == nil || row.Media.Size != int64(len(img)) {
 		t.Fatalf("persisted media lost: %+v", row.Media)
+	}
+}
+
+func TestDeleteMessageRevokesOwnRow(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	sent, err := a.SendText(context.Background(), alice, "oops", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, sub, "message.received")
+
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	if len(fw.revokes) != 1 || fw.revokes[0].chat != alice || fw.revokes[0].id != "SRVoops" {
+		fw.mu.Unlock()
+		t.Fatalf("revoke calls = %+v", fw.revokes)
+	}
+	fw.mu.Unlock()
+	waitFor(t, sub, "message.updated")
+
+	m, err := st.GetMessage(context.Background(), sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Revoked || m.Text != "" {
+		t.Fatalf("row not revoked: %+v", m)
+	}
+
+	// Idempotent: an already-revoked row is a no-op, no second wire call.
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.revokes) != 1 {
+		t.Fatalf("second delete hit the wire: %+v", fw.revokes)
+	}
+}
+
+func TestDeleteMessageRejectsIncoming(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	fw.push(incomingMsg("m9", alice, alice, "hello"))
+	waitFor(t, sub, "message.received")
+	msgs, _ := st.ListMessages(context.Background(), alice, 0, 0, 10)
+	if len(msgs) != 1 {
+		t.Fatalf("ingest: %+v", msgs)
+	}
+
+	if err := a.DeleteMessage(context.Background(), msgs[0].ID); !errors.Is(err, app.ErrNotOwnMessage) {
+		t.Fatalf("want ErrNotOwnMessage, got %v", err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.revokes) != 0 {
+		t.Fatalf("incoming row hit the wire: %+v", fw.revokes)
+	}
+}
+
+func TestDeleteMessageWAFailureLeavesRowIntact(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	sent, _ := a.SendText(context.Background(), alice, "boom", nil, nil)
+	waitFor(t, sub, "message.received")
+
+	fw.mu.Lock()
+	fw.revokeErr = errors.New("net down")
+	fw.mu.Unlock()
+	if err := a.DeleteMessage(context.Background(), sent.ID); err == nil {
+		t.Fatal("want error")
+	}
+	m, _ := st.GetMessage(context.Background(), sent.ID)
+	if m.Revoked || m.Text != "boom" {
+		t.Fatalf("row must stay intact on wire failure: %+v", m)
+	}
+
+	// Recovery: same row deletes fine once the wire works again.
+	fw.mu.Lock()
+	fw.revokeErr = nil
+	fw.mu.Unlock()
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteMessageNotFound(t *testing.T) {
+	a, _, _, _ := newTestApp(t)
+	if err := a.DeleteMessage(context.Background(), 999999); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("want storage.ErrNotFound, got %v", err)
 	}
 }
