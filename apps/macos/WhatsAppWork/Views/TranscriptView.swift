@@ -1304,39 +1304,7 @@ struct MediaBubble: View {
                 await state.ensureMedia(message)
                 return
             }
-            guard let client = state.apiClient,
-                  let (data, _) = try? await client.mediaData(rowID: message.id) else {
-                state.toast = "Media fetch failed"
-                return
-            }
-            // Suggested name: the document's own filename; the extension
-            // fallback derives from the stored MIME type via UTType — never
-            // from the HTTP Content-Type, whose pathExtension is always "".
-            let provided = media.filename.flatMap { $0.isEmpty ? nil : $0 }?
-                .replacingOccurrences(of: "/", with: "_")
-            let fallback = "\(media.kind.capitalized)-\(message.id)"
-            let nameExt = provided.map { ($0 as NSString).pathExtension } ?? ""
-            let ext = !nameExt.isEmpty
-                ? nameExt
-                : UTType(mimeType: media.mime)?.preferredFilenameExtension ?? "bin"
-            let base = ((provided ?? fallback) as NSString).deletingPathExtension
-            let panel: NSSavePanel = {
-                let p = NSSavePanel()
-                p.title = "Save Media"
-                p.nameFieldStringValue = nameExt.isEmpty ? "\(base).\(ext)" : (provided ?? fallback)
-                p.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                return p
-            }()
-            guard let window = NSApp.keyWindow ?? NSApp.windows.first,
-                  await panel.beginSheetModal(for: window) == .OK,
-                  let dest = panel.url else { return }
-            do {
-                try data.write(to: dest)
-                state.toast = "Saved \(dest.lastPathComponent)"
-                NSWorkspace.shared.selectFile(dest.path, inFileViewerRootedAtPath: dest.deletingLastPathComponent().path)
-            } catch {
-                state.toast = "Save failed: \(error.localizedDescription)"
-            }
+            await state.saveMediaToDisk(message)
         }
     }
 
@@ -1677,6 +1645,12 @@ struct ImagePreviewSheet: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        Task { await state.saveMediaToDisk(preview.message) }
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .help("Save image to disk")
                     Button("Close") { state.previewImage = nil }
                         .keyboardShortcut(.cancelAction)
                 }

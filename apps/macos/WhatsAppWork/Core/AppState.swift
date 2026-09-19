@@ -2301,6 +2301,66 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Save media bytes to disk: fetch from the core, save panel (defaults
+    /// to ~/Downloads), write, reveal in Finder. Shared by the non-image
+    /// bubble action and the image-preview Save button.
+    func saveMediaToDisk(_ message: Message) async {
+        guard let client = apiClient,
+              let media = message.media,
+              let (data, _) = try? await client.mediaData(rowID: message.id) else {
+            toast = "Media fetch failed"
+            return
+        }
+        guard let dest = await Self.chooseSaveDestination(
+            filename: media.filename, kind: media.kind, mime: media.mime, rowID: message.id
+        ) else { return }
+        do {
+            try data.write(to: dest)
+            toast = "Saved \(dest.lastPathComponent)"
+            NSWorkspace.shared.selectFile(dest.path, inFileViewerRootedAtPath: dest.deletingLastPathComponent().path)
+        } catch {
+            toast = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Pure filename policy (unit-tested): the stored filename wins; the
+    /// fallback is "<Kind>-<rowid>" with an extension derived from the
+    /// stored MIME via UTType — never from the HTTP Content-Type, whose
+    /// pathExtension is always "".
+    nonisolated static func suggestedSaveName(filename: String?, kind: String, mime: String, rowID: Int64) -> String {
+        let provided = filename.flatMap { $0.isEmpty ? nil : $0 }?
+            .replacingOccurrences(of: "/", with: "_")
+        let fallback = "\(kind.capitalized)-\(rowID)"
+        let nameExt = provided.map { ($0 as NSString).pathExtension } ?? ""
+        let ext = !nameExt.isEmpty
+            ? nameExt
+            : Self.fileExtension(forMIME: mime)
+        let base = ((provided ?? fallback) as NSString).deletingPathExtension
+        return nameExt.isEmpty ? "\(base).\(ext)" : (provided ?? fallback)
+    }
+
+    /// UTType answers "jpeg" for image/jpeg on this OS; WhatsApp's
+    /// convention (and the unit tests) expect ".jpg". Everything else
+    /// derives from the stored MIME; unknown MIME falls back to "bin".
+    nonisolated private static func fileExtension(forMIME mime: String) -> String {
+        if mime.lowercased() == "image/jpeg" { return "jpg" }
+        return UTType(mimeType: mime)?.preferredFilenameExtension ?? "bin"
+    }
+
+    @MainActor
+    static func chooseSaveDestination(filename: String?, kind: String, mime: String, rowID: Int64) async -> URL? {
+        let panel: NSSavePanel = {
+            let p = NSSavePanel()
+            p.title = "Save Media"
+            p.nameFieldStringValue = suggestedSaveName(filename: filename, kind: kind, mime: mime, rowID: rowID)
+            p.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            return p
+        }()
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first,
+              await panel.beginSheetModal(for: window) == .OK else { return nil }
+        return panel.url
+    }
+
     /// Decoded-image RAM budget: ~48 MB of bitmaps, evicting oldest-media
     /// entries (rowids grow with recency) first. A count-only cap let 240
     /// × 720 px bitmaps accumulate to hundreds of MB.
