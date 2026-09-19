@@ -545,6 +545,21 @@ func (c *Client) MarkRead(ctx context.Context, chatJID, senderJID string, messag
 	return nil
 }
 
+// RevokeMessage sends a protocol-level revoke for one of our own messages
+// (delete-for-everyone). Own messages revoke with an empty sender JID —
+// BuildRevoke/BuildMessageKey fills FromMe and the group participant.
+func (c *Client) RevokeMessage(ctx context.Context, chatJID, messageID string) error {
+	chat, err := types.ParseJID(chatJID)
+	if err != nil || chat.IsEmpty() {
+		return fmt.Errorf("whatsapp: bad chat jid %q", chatJID)
+	}
+	msg := c.cli.BuildRevoke(chat, types.EmptyJID, messageID)
+	if _, err := c.cli.SendMessage(ctx, chat, msg); err != nil {
+		return fmt.Errorf("whatsapp: revoke: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) GroupMembers(ctx context.Context, groupJID string) ([]core.GroupMember, error) {
 	gid, err := types.ParseJID(groupJID)
 	if err != nil {

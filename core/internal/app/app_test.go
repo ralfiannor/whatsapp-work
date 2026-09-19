@@ -33,16 +33,18 @@ type mediaSent struct {
 }
 
 type fakeWA struct {
-	mu       sync.Mutex
-	evCh     chan core.RawEvent
-	sendErr  error
-	sent     []sentCall
-	marked   []markCall
-	media    []mediaSent
-	reacts   []reactCall
-	logouts  int
-	links    int
-	loggedIn bool
+	mu        sync.Mutex
+	evCh      chan core.RawEvent
+	sendErr   error
+	sent      []sentCall
+	marked    []markCall
+	media     []mediaSent
+	reacts    []reactCall
+	revokes   []revokeCall
+	revokeErr error
+	logouts   int
+	links     int
+	loggedIn  bool
 	// usync directory answers (jid -> verified business name).
 	userNames map[string]string
 }
@@ -57,6 +59,9 @@ type markCall struct {
 }
 type reactCall struct {
 	chat, target, emoji string
+}
+type revokeCall struct {
+	chat, id string
 }
 
 func newFakeWA() *fakeWA { return &fakeWA{evCh: make(chan core.RawEvent, 64)} }
@@ -142,6 +147,13 @@ func (f *fakeWA) MarkRead(ctx context.Context, chat, sender string, ids []string
 	f.marked = append(f.marked, markCall{chat, sender, ids})
 	f.mu.Unlock()
 	return nil
+}
+
+func (f *fakeWA) RevokeMessage(ctx context.Context, chat, id string) error {
+	f.mu.Lock()
+	f.revokes = append(f.revokes, revokeCall{chat, id})
+	f.mu.Unlock()
+	return f.revokeErr
 }
 
 func (f *fakeWA) push(ev core.RawEvent) { f.evCh <- ev }

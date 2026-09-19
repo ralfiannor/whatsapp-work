@@ -48,6 +48,9 @@ func (f *fakeWA) MarkRead(ctx context.Context, chat, sender string, ids []string
 func (f *fakeWA) React(ctx context.Context, chat string, target core.MessageRef, emoji string) error {
 	return nil
 }
+func (f *fakeWA) RevokeMessage(ctx context.Context, chat, id string) error {
+	return nil
+}
 func (f *fakeWA) ProfilePicture(ctx context.Context, jid string) (string, error) {
 	return "", nil // no picture in tests
 }
