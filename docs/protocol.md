@@ -107,6 +107,10 @@ POST /messages                  {"chat_jid":"…","text":"…",
 POST /messages/{rowid}/react    {"emoji":"✅"}   // "" removes the reaction
 → 204
 
+POST /messages/{id}/delete
+→ 204        # revokes the caller's own message for everyone (delete-for-everyone)
+             # 404 unknown row · 400 not an own message
+
 POST /chats/{jid}/media?kind=image&mime=image/jpeg&filename=…[&caption=…]
   body: raw bytes (≤ 20 MiB)    // reply context via `reply_id` /
                                  // `reply_sender` query params

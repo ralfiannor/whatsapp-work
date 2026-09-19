@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
 	mux.HandleFunc("POST /chats/{jid}/media", s.handleSendMedia)
 	mux.HandleFunc("POST /messages/{id}/react", s.handleReact)
+	mux.HandleFunc("POST /messages/{id}/delete", s.handleMsgDelete)
 	mux.HandleFunc("GET /contacts", s.handleContacts)
 	mux.HandleFunc("GET /contacts/{jid}/profile", s.handleProfile)
 	mux.HandleFunc("GET /contacts/{jid}/identity", s.handleIdentity)
@@ -347,6 +348,27 @@ func (s *Server) handleReact(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMsgDelete revokes the caller's own message for everyone.
+func (s *Server) handleMsgDelete(w http.ResponseWriter, r *http.Request) {
+	rowID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "bad message id")
+		return
+	}
+	if err := s.api.DeleteMessage(r.Context(), rowID); err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			writeErr(w, http.StatusNotFound, "not_found", "message not found")
+		case errors.Is(err, app.ErrNotOwnMessage):
+			writeErr(w, http.StatusBadRequest, "bad_request", "only own messages can be deleted")
+		default:
+			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
