@@ -2048,6 +2048,32 @@ final class AppState: ObservableObject {
         await deliver(text, in: chat, reply: reply)
     }
 
+    /// Delete-for-everyone: confirmation target, then revoke + optimistic
+    /// tombstone; the message.updated WS echo re-asserts server truth.
+    @Published var deleteTarget: Message?
+
+    func requestDeleteMessage(_ m: Message) { deleteTarget = m }
+
+    func deleteMessage(_ m: Message) async {
+        guard let client = apiClient else { return }
+        do {
+            try await client.deleteMessage(rowID: m.id)
+            applyRevokedLocally(m)
+        } catch {
+            toast = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Optimistic tombstone (same pattern as optimistic sends): the bubble
+    /// becomes «deleted» immediately; WS reconciliation follows.
+    private func applyRevokedLocally(_ m: Message) {
+        guard var list = messagesByChat[m.chat_jid],
+              let idx = list.firstIndex(where: { $0.id == m.id }) else { return }
+        list[idx].revoked = true
+        list[idx].text = ""
+        messagesByChat[m.chat_jid] = list
+    }
+
     private func makePendingMessage(chat: String, text: String, reply: Message?) -> Message {
         let id = nextTempMessageID
         nextTempMessageID -= 1

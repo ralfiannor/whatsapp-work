@@ -305,6 +305,17 @@ private struct MessageList: View, Equatable {
                         .padding(12)
                 }
             }
+            .alert("Delete for everyone?", isPresented: Binding(
+                get: { state.deleteTarget != nil },
+                set: { if !$0 { state.deleteTarget = nil } })) {
+                Button("Delete", role: .destructive) {
+                    if let m = state.deleteTarget { Task { await state.deleteMessage(m) } }
+                    state.deleteTarget = nil
+                }
+                Button("Cancel", role: .cancel) { state.deleteTarget = nil }
+            } message: {
+                Text("The message will be removed for everyone in this chat.")
+            }
             // New message while reading at the bottom: snap (no animation —
             // a busy group must not make the transcript swim).
             .onChange(of: messages.last?.id) { _, _ in
@@ -1191,6 +1202,9 @@ struct MessageBubble: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 }
+            }
+            if message.from_me && !message.revoked {
+                Button("Delete…") { state.requestDeleteMessage(message) }
             }
             if message.chat_jid.hasSuffix("@g.us") && !message.from_me {
                 Button("Mention @\(state.ircNick(for: message))") {

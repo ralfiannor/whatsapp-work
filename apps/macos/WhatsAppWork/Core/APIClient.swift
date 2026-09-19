@@ -47,7 +47,7 @@ struct Message: Codable, Identifiable, Equatable {
     let has_mention: Bool
     var mentioned_jids: [String]?
     var receipt_status: String?
-    let revoked: Bool
+    var revoked: Bool
     var forwarded: Bool?
     var edited_ts: Int64?
     // Local work-inbox state (LEFT JOIN on message reads). Optional: cores
@@ -648,6 +648,11 @@ actor APIClient {
     func react(rowID: Int64, emoji: String) async throws {
         struct Body: Codable { let emoji: String }
         _ = try await request("POST", "messages/\(rowID)/react", body: try JSONEncoder().encode(Body(emoji: emoji)))
+    }
+
+    /// Delete-for-everyone on one of our own messages (204; 400 non-own, 404 unknown).
+    func deleteMessage(rowID: Int64) async throws {
+        _ = try await request("POST", "messages/\(rowID)/delete")
     }
 
     /// 5000 = server max. The full directory must arrive: the transcript's
