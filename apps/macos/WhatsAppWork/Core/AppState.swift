@@ -1929,24 +1929,31 @@ final class AppState: ObservableObject {
 
     /// Mention tokens carry identity digits on the wire — the receiver
     /// binds the highlight from "@<digits>", not display labels, and
-    /// renders the digits as the name (official clients emit this shape in
-    /// every group). Display labels are replaced WHOLE, multi-word labels
-    /// included, right before sending; the core's positional fallback can
-    /// only bound single words, so it never sees a label from us.
+    /// renders the digits as the name. The token's digits MUST match the
+    /// JID form that lands in MentionedJID: LID-space groups (JID contains
+    /// "-", the core's own rule) get mentions mapped to @lid, so the token
+    /// takes the member's LID digits; every other group sends the PN
+    /// unchanged, so the token takes the PN digits. A mismatch renders as
+    /// plain text on receivers. Display labels are replaced WHOLE,
+    /// multi-word labels included.
     nonisolated static func wireMentionText(_ text: String, chat: String, mentioned: [String],
                                             targets: [String: String],
                                             members: [APIClient.GroupMember]) -> String {
         guard chat.hasSuffix("@g.us"), !mentioned.isEmpty else { return text }
+        let lidSpace = chat.contains("-")
         var out = text
         for jid in mentioned {
             guard let label = targets[jid],
                   let member = members.first(where: { $0.jid == jid }) else { continue }
+            let digits = lidSpace
+                ? member.mentionDigits
+                : String(member.jid.prefix(while: { $0 != "@" }))
             let token = "@\(label)"
             if let r = out.range(of: token) {
                 let after = r.upperBound
                 let afterOK = after == out.endIndex || !MentionTokenMatcher.isWordChar(out[after])
                 if afterOK {
-                    out.replaceSubrange(r, with: "@" + member.mentionDigits)
+                    out.replaceSubrange(r, with: "@" + digits)
                 }
             }
         }

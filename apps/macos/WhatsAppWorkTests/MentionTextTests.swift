@@ -41,15 +41,19 @@ final class WireMentionTextTests: XCTestCase {
     }
 
     func testMultiWordLabelReplacedWholeInNonLIDGroup() {
+        // Member HAS a lid twin, but a non-LID group sends the PN mention
+        // (core pass-through) — the token must carry PN digits or WhatsApp
+        // renders it as plain text (digits ≠ MentionedJID never binds).
         let out = AppState.wireMentionText(
             "@Nura Biks lu ada update?", chat: group, mentioned: [nura],
-            targets: [nura: "Nura Biks"], members: [member(nura)])
+            targets: [nura: "Nura Biks"], members: [member(nura, lid: "229055001571436@lid")])
         XCTAssertEqual(out, "@4915204107177 lu ada update?")
     }
 
     func testLIDSpaceMemberUsesLIDDigits() {
+        let lidGroup = "4782936427-1234567890@g.us"
         let out = AppState.wireMentionText(
-            "@Nura Biks x", chat: group, mentioned: [nura],
+            "@Nura Biks x", chat: lidGroup, mentioned: [nura],
             targets: [nura: "Nura Biks"], members: [member(nura, lid: "34411378638957@lid")])
         XCTAssertEqual(out, "@34411378638957 x")
     }
