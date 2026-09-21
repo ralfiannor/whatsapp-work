@@ -1927,26 +1927,24 @@ final class AppState: ObservableObject {
         !MentionTokenMatcher.matchedRanges(text: text, labels: [label]).isEmpty
     }
 
-    private func isWordChar(_ c: Character) -> Bool {
-        c.isLetter || c.isNumber || c == "_"
-    }
-
-    /// Mention tokens must carry identity digits in LID-space groups (the
-    /// receiver binds the highlight from "@<digits>", not from display
-    /// labels); receivers render the digits as the name. Display labels are
-    /// replaced right before sending, so the composer keeps its friendly
-    /// "@Name" text while the wire gets the bindable token.
-    private func wireMentionText(_ text: String, chat: String, mentioned: [String],
-                                 targets: [String: String]) -> String {
-        guard chat.hasSuffix("@g.us"), chat.contains("-"), !mentioned.isEmpty else { return text }
+    /// Mention tokens carry identity digits on the wire — the receiver
+    /// binds the highlight from "@<digits>", not display labels, and
+    /// renders the digits as the name (official clients emit this shape in
+    /// every group). Display labels are replaced WHOLE, multi-word labels
+    /// included, right before sending; the core's positional fallback can
+    /// only bound single words, so it never sees a label from us.
+    nonisolated static func wireMentionText(_ text: String, chat: String, mentioned: [String],
+                                            targets: [String: String],
+                                            members: [APIClient.GroupMember]) -> String {
+        guard chat.hasSuffix("@g.us"), !mentioned.isEmpty else { return text }
         var out = text
         for jid in mentioned {
             guard let label = targets[jid],
-                  let member = chatMembers[chat]?.first(where: { $0.jid == jid }) else { continue }
+                  let member = members.first(where: { $0.jid == jid }) else { continue }
             let token = "@\(label)"
             if let r = out.range(of: token) {
                 let after = r.upperBound
-                let afterOK = after == out.endIndex || !isWordChar(out[after])
+                let afterOK = after == out.endIndex || !MentionTokenMatcher.isWordChar(out[after])
                 if afterOK {
                     out.replaceSubrange(r, with: "@" + member.mentionDigits)
                 }
@@ -1965,8 +1963,9 @@ final class AppState: ObservableObject {
         let mentioned = activeTargets.compactMap { jid, label in
             containsMentionToken(trimmed, label: label) ? jid : nil
         }
-        let wireText = wireMentionText(trimmed, chat: chat, mentioned: mentioned,
-                                       targets: activeTargets)
+        let wireText = Self.wireMentionText(trimmed, chat: chat, mentioned: mentioned,
+                                            targets: activeTargets,
+                                            members: chatMembers[chat] ?? [])
         let temp = makePendingMessage(chat: chat, text: trimmed, reply: reply)
         activeTextOperationChatsByTemp[temp.id] = chat
         if wireText != trimmed {

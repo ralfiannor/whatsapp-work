@@ -343,11 +343,24 @@ func (c *Client) SendText(ctx context.Context, chatJID, text string, reply *core
 	c.log.Info("whatsapp: send text", "chat", chatJID,
 		"mentions_in", mentioned, "mentions_wire", wireMentions,
 		"group_lid_space", to.Server == types.GroupServer && strings.Contains(to.User, "-"))
-	resp, err := c.cli.SendMessage(ctx, to, c.buildText(rewriteMentionTokens(text, wireMentions), reply, wireMentions))
+	resp, err := c.cli.SendMessage(ctx, to, c.buildText(mentionWireText(to, text, wireMentions), reply, wireMentions))
 	if err != nil {
 		return core.SendAck{}, fmt.Errorf("whatsapp: send: %w", err)
 	}
 	return core.SendAck{MessageID: resp.ID, Timestamp: resp.Timestamp.Unix()}, nil
+}
+
+// mentionWireText gates the positional token rewrite to LID-space groups.
+// The composer already sends identity-digit tokens for every group; the
+// word-boundary swallow below cannot know where a multi-word display label
+// ends — applied outside LID space it corrupted labels on receivers
+// ("@Nura Biks" became "@digits Biks", the receiver re-rendering the digits
+// as the full name plus the swallowed tail).
+func mentionWireText(chat types.JID, text string, wireMentions []string) string {
+	if chat.Server != types.GroupServer || !strings.Contains(chat.User, "-") {
+		return text
+	}
+	return rewriteMentionTokens(text, wireMentions)
 }
 
 // mentionJIDsForWire rewrites mentioned JIDs into the group's own identity
