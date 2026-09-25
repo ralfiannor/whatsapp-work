@@ -15,9 +15,18 @@ enum PasteRoutingPolicy {
 
 enum ChatOpenSource: CaseIterable {
     case keyboardSelection, enter, mouse, transcriptFocus, composerFocus
+    case selectionChange
     case search, inbox, notification, deepLink
 
     var acknowledgesRead: Bool { self != .keyboardSelection }
+}
+
+/// DM read-receipt suppression is a privacy setting; group chats always
+/// send (their receipts are invisible to senders anyway).
+enum ReadReceiptPolicy {
+    static func shouldSendReceipt(chatJID: String, suppressDMReceipts: Bool) -> Bool {
+        chatJID.hasSuffix("@g.us") || !suppressDMReceipts
+    }
 }
 
 struct ReadCommitGate {

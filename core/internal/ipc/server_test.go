@@ -48,6 +48,9 @@ func (f *fakeWA) MarkRead(ctx context.Context, chat, sender string, ids []string
 func (f *fakeWA) React(ctx context.Context, chat string, target core.MessageRef, emoji string) error {
 	return nil
 }
+func (f *fakeWA) RevokeMessage(ctx context.Context, chat, id string) error {
+	return nil
+}
 func (f *fakeWA) ProfilePicture(ctx context.Context, jid string) (string, error) {
 	return "", nil // no picture in tests
 }
@@ -238,6 +241,20 @@ func TestReactAndRead(t *testing.T) {
 	}
 }
 
+func TestChatReadSendReceiptParam(t *testing.T) {
+	e := newEnv(t)
+
+	if code, _ := e.do("POST", "/chats/"+alice+"/read?send_receipt=false", "", true); code != http.StatusNoContent {
+		t.Fatalf("send_receipt=false status = %d", code)
+	}
+	if code, _ := e.do("POST", "/chats/"+alice+"/read", "", true); code != http.StatusNoContent {
+		t.Fatalf("default status = %d", code)
+	}
+	if code, _ := e.do("POST", "/chats/"+alice+"/read?send_receipt=nope", "", true); code != http.StatusBadRequest {
+		t.Fatalf("bad value status = %d", code)
+	}
+}
+
 func TestSearchEndpoint(t *testing.T) {
 	e := newEnv(t)
 	e.post("/messages", fmt.Sprintf(`{"chat_jid":%q,"text":"deployment staging failed"}`, alice))
@@ -328,5 +345,40 @@ func TestWebSocketEvents(t *testing.T) {
 	// Unauthenticated WS dial must fail.
 	if _, _, err := websocket.Dial(context.Background(), e.srv.URL+"/ws", nil); err == nil {
 		t.Fatal("unauthenticated ws dial accepted")
+	}
+}
+
+func TestDeleteMessageRoute(t *testing.T) {
+	e := newEnv(t)
+
+	code, body := e.do("POST", "/messages", `{"chat_jid":"`+alice+`","text":"oops"}`, true)
+	if code != http.StatusCreated {
+		t.Fatalf("send status = %d body = %v", code, body)
+	}
+	id := int64(body["id"].(float64))
+
+	if code, _ := e.do("POST", fmt.Sprintf("/messages/%d/delete", id), "", true); code != http.StatusNoContent {
+		t.Fatalf("delete status = %d", code)
+	}
+	// Row is revoked through the public read path.
+	code, body = e.do("GET", "/chats/"+alice+"/messages?limit=10", "", true)
+	if code != http.StatusOK {
+		t.Fatalf("list status = %d", code)
+	}
+	msgs := body["messages"].([]any)
+	first := msgs[0].(map[string]any)
+	if first["revoked"] != true {
+		t.Fatalf("row not revoked: %v", first)
+	}
+	// Idempotent second delete still 204.
+	if code, _ := e.do("POST", fmt.Sprintf("/messages/%d/delete", id), "", true); code != http.StatusNoContent {
+		t.Fatalf("second delete status = %d", code)
+	}
+	// Unknown row → 404, garbage id → 400.
+	if code, _ := e.do("POST", "/messages/999999/delete", "", true); code != http.StatusNotFound {
+		t.Fatalf("missing row status = %d", code)
+	}
+	if code, _ := e.do("POST", "/messages/abc/delete", "", true); code != http.StatusBadRequest {
+		t.Fatalf("bad id status = %d", code)
 	}
 }

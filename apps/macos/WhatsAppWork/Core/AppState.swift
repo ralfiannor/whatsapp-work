@@ -37,6 +37,15 @@ final class AppState: ObservableObject {
             enforceTranscriptRetention()
         }
     }
+    /// Marks exactly one upcoming selection-change observation as j/k-style
+    /// preview browsing so the List observer skips the read commit.
+    private var selectionBrowsing = false
+    func markSelectionBrowsing() { selectionBrowsing = true }
+    func consumeSelectionBrowsing() -> Bool {
+        let browsing = selectionBrowsing
+        selectionBrowsing = false
+        return browsing
+    }
     @Published var messagesByChat: [String: [Message]] = [:]
     /// Advances only after the selected chat's newly fetched page has decoded
     /// and merged. TranscriptView uses it to avoid treating cached rows that
@@ -54,6 +63,10 @@ final class AppState: ObservableObject {
     @Published var unreadBoundaries: [String: UnreadBoundary] = [:]
     /// Bump to move keyboard focus into the composer (R key / reply flow).
     @Published var composerFocusRequest = 0
+    /// Bumped after draftStore gains programmatic text (wa.me ?text=
+    /// prefill) — the composer re-reads the store on change; draftStore
+    /// itself is not published (keystrokes stay view-local).
+    @Published var draftPrefillRequest = 0
     /// Per-chat composer drafts (not published: keystrokes must stay inside
     /// ComposerBar). Switching chats preserves, returning restores.
     var draftStore: [String: String] = [:]
@@ -74,6 +87,9 @@ final class AppState: ObservableObject {
     /// Focus Mode: only work-marked chats (work groups + starred work
     /// contacts) may notify or feed the dock badge; everything else silent.
     @AppStorage("focusMode") var focusMode = false
+    /// Privacy: DM read receipts are suppressed unless the user opts back
+    /// in (Settings ▸ "Don't send read receipts in direct messages").
+    @AppStorage("suppressDMReadReceipts") var suppressDMReadReceipts = true
     /// Message to scroll to once the transcript loads (inbox/search jump).
     /// Chat-scoped: an unresolved anchor must never page history in the
     /// WRONG chat after the user switches before it resolves.
@@ -1542,6 +1558,7 @@ final class AppState: ObservableObject {
             pendingAnchor = nil
         }
         switchOpenedChat(to: chat)
+        markSelectionBrowsing()
         selectedChat = chat
         await loadPreview(request)
     }
@@ -1652,11 +1669,13 @@ final class AppState: ObservableObject {
             liveUnreadCount: unread,
             messages: messagesByChat[chat] ?? []
         )
+        let sendReceipt = ReadReceiptPolicy.shouldSendReceipt(
+            chatJID: chat, suppressDMReceipts: suppressDMReadReceipts)
         let result = await readCommitAction.commit(
             chatJID: chat,
             source: source,
             fallbackUnreadCount: fallbackUnread,
-            request: { try await client.markRead(chat: chat) },
+            request: { try await client.markRead(chat: chat, sendReceipt: sendReceipt) },
             onSuccess: {
                 if let index = self.chats.firstIndex(where: { $0.jid == chat }) {
                     self.chats[index].unread_count = 0
@@ -1909,43 +1928,36 @@ final class AppState: ObservableObject {
     }
 
     private func containsMentionToken(_ text: String, label: String) -> Bool {
-        var searchStart = text.startIndex
-        while let r = text.range(of: "@\(label)", range: searchStart..<text.endIndex) {
-            let afterOK = r.upperBound == text.endIndex ||
-                          !isWordChar(text[r.upperBound])
-            // `index(before:)` is only valid when the match is NOT at the
-            // string's start — evaluating it eagerly crashed (SIGILL in
-            // Release) on drafts that open with "@name …".
-            let beforeOK = r.lowerBound == text.startIndex
-                || !isWordChar(text[text.index(before: r.lowerBound)])
-            if afterOK && beforeOK { return true }
-            searchStart = r.upperBound
-        }
-        return false
+        !MentionTokenMatcher.matchedRanges(text: text, labels: [label]).isEmpty
     }
 
-    private func isWordChar(_ c: Character) -> Bool {
-        c.isLetter || c.isNumber || c == "_"
-    }
-
-    /// Mention tokens must carry identity digits in LID-space groups (the
-    /// receiver binds the highlight from "@<digits>", not from display
-    /// labels); receivers render the digits as the name. Display labels are
-    /// replaced right before sending, so the composer keeps its friendly
-    /// "@Name" text while the wire gets the bindable token.
-    private func wireMentionText(_ text: String, chat: String, mentioned: [String],
-                                 targets: [String: String]) -> String {
-        guard chat.hasSuffix("@g.us"), chat.contains("-"), !mentioned.isEmpty else { return text }
+    /// Mention tokens carry identity digits on the wire — the receiver
+    /// binds the highlight from "@<digits>", not display labels, and
+    /// renders the digits as the name. The token's digits MUST match the
+    /// JID form that lands in MentionedJID: LID-space groups (JID contains
+    /// "-", the core's own rule) get mentions mapped to @lid, so the token
+    /// takes the member's LID digits; every other group sends the PN
+    /// unchanged, so the token takes the PN digits. A mismatch renders as
+    /// plain text on receivers. Display labels are replaced WHOLE,
+    /// multi-word labels included.
+    nonisolated static func wireMentionText(_ text: String, chat: String, mentioned: [String],
+                                            targets: [String: String],
+                                            members: [APIClient.GroupMember]) -> String {
+        guard chat.hasSuffix("@g.us"), !mentioned.isEmpty else { return text }
+        let lidSpace = chat.contains("-")
         var out = text
         for jid in mentioned {
             guard let label = targets[jid],
-                  let member = chatMembers[chat]?.first(where: { $0.jid == jid }) else { continue }
+                  let member = members.first(where: { $0.jid == jid }) else { continue }
+            let digits = lidSpace
+                ? member.mentionDigits
+                : String(member.jid.prefix(while: { $0 != "@" }))
             let token = "@\(label)"
             if let r = out.range(of: token) {
                 let after = r.upperBound
-                let afterOK = after == out.endIndex || !isWordChar(out[after])
+                let afterOK = after == out.endIndex || !MentionTokenMatcher.isWordChar(out[after])
                 if afterOK {
-                    out.replaceSubrange(r, with: "@" + member.mentionDigits)
+                    out.replaceSubrange(r, with: "@" + digits)
                 }
             }
         }
@@ -1962,8 +1974,9 @@ final class AppState: ObservableObject {
         let mentioned = activeTargets.compactMap { jid, label in
             containsMentionToken(trimmed, label: label) ? jid : nil
         }
-        let wireText = wireMentionText(trimmed, chat: chat, mentioned: mentioned,
-                                       targets: activeTargets)
+        let wireText = Self.wireMentionText(trimmed, chat: chat, mentioned: mentioned,
+                                            targets: activeTargets,
+                                            members: chatMembers[chat] ?? [])
         let temp = makePendingMessage(chat: chat, text: trimmed, reply: reply)
         activeTextOperationChatsByTemp[temp.id] = chat
         if wireText != trimmed {
@@ -2031,6 +2044,32 @@ final class AppState: ObservableObject {
                             forwarded: nil, edited_ts: nil, raw_kind: nil, media: nil, reactions: nil)
         }
         await deliver(text, in: chat, reply: reply)
+    }
+
+    /// Delete-for-everyone: confirmation target, then revoke + optimistic
+    /// tombstone; the message.updated WS echo re-asserts server truth.
+    @Published var deleteTarget: Message?
+
+    func requestDeleteMessage(_ m: Message) { deleteTarget = m }
+
+    func deleteMessage(_ m: Message) async {
+        guard let client = apiClient else { return }
+        do {
+            try await client.deleteMessage(rowID: m.id)
+            applyRevokedLocally(m)
+        } catch {
+            toast = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Optimistic tombstone (same pattern as optimistic sends): the bubble
+    /// becomes «deleted» immediately; WS reconciliation follows.
+    private func applyRevokedLocally(_ m: Message) {
+        guard var list = messagesByChat[m.chat_jid],
+              let idx = list.firstIndex(where: { $0.id == m.id }) else { return }
+        list[idx].revoked = true
+        list[idx].text = ""
+        messagesByChat[m.chat_jid] = list
     }
 
     private func makePendingMessage(chat: String, text: String, reply: Message?) -> Message {
@@ -2301,6 +2340,66 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Save media bytes to disk: fetch from the core, save panel (defaults
+    /// to ~/Downloads), write, reveal in Finder. Shared by the non-image
+    /// bubble action and the image-preview Save button.
+    func saveMediaToDisk(_ message: Message) async {
+        guard let client = apiClient,
+              let media = message.media,
+              let (data, _) = try? await client.mediaData(rowID: message.id) else {
+            toast = "Media fetch failed"
+            return
+        }
+        guard let dest = await Self.chooseSaveDestination(
+            filename: media.filename, kind: media.kind, mime: media.mime, rowID: message.id
+        ) else { return }
+        do {
+            try data.write(to: dest)
+            toast = "Saved \(dest.lastPathComponent)"
+            NSWorkspace.shared.selectFile(dest.path, inFileViewerRootedAtPath: dest.deletingLastPathComponent().path)
+        } catch {
+            toast = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Pure filename policy (unit-tested): the stored filename wins; the
+    /// fallback is "<Kind>-<rowid>" with an extension derived from the
+    /// stored MIME via UTType — never from the HTTP Content-Type, whose
+    /// pathExtension is always "".
+    nonisolated static func suggestedSaveName(filename: String?, kind: String, mime: String, rowID: Int64) -> String {
+        let provided = filename.flatMap { $0.isEmpty ? nil : $0 }?
+            .replacingOccurrences(of: "/", with: "_")
+        let fallback = "\(kind.capitalized)-\(rowID)"
+        let nameExt = provided.map { ($0 as NSString).pathExtension } ?? ""
+        let ext = !nameExt.isEmpty
+            ? nameExt
+            : Self.fileExtension(forMIME: mime)
+        let base = ((provided ?? fallback) as NSString).deletingPathExtension
+        return nameExt.isEmpty ? "\(base).\(ext)" : (provided ?? fallback)
+    }
+
+    /// UTType answers "jpeg" for image/jpeg on this OS; WhatsApp's
+    /// convention (and the unit tests) expect ".jpg". Everything else
+    /// derives from the stored MIME; unknown MIME falls back to "bin".
+    nonisolated private static func fileExtension(forMIME mime: String) -> String {
+        if mime.lowercased() == "image/jpeg" { return "jpg" }
+        return UTType(mimeType: mime)?.preferredFilenameExtension ?? "bin"
+    }
+
+    @MainActor
+    static func chooseSaveDestination(filename: String?, kind: String, mime: String, rowID: Int64) async -> URL? {
+        let panel: NSSavePanel = {
+            let p = NSSavePanel()
+            p.title = "Save Media"
+            p.nameFieldStringValue = suggestedSaveName(filename: filename, kind: kind, mime: mime, rowID: rowID)
+            p.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            return p
+        }()
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first,
+              await panel.beginSheetModal(for: window) == .OK else { return nil }
+        return panel.url
+    }
+
     /// Decoded-image RAM budget: ~48 MB of bitmaps, evicting oldest-media
     /// entries (rowids grow with recency) first. A count-only cap let 240
     /// × 720 px bitmaps accumulate to hundreds of MB.
@@ -2501,16 +2600,64 @@ final class AppState: ObservableObject {
     /// wa.me "Continue to Chat" continuation) for either registered scheme.
     /// Unknown chats get a minimal local row — the server row appears on
     /// first send. `text=` lands in the composer as a focused draft.
-    func handleWhatsAppLink(_ url: URL) async {
-        guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+    /// Parses "Continue to Chat" links into (chat phone digits, prefill
+    /// text). Three shapes share one outcome: custom scheme
+    /// `whatsapp://send?phone=&text=`, `https://wa.me/<digits>?text=`
+    /// (digits in the PATH), and `https://api.whatsapp.com/send?phone=&text=`.
+    /// Anything else is not ours (nil → open externally).
+    nonisolated static func parseWhatsAppChatLink(_ url: URL) -> (digits: String, text: String?)? {
+        guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // Unwrap our transcript routing form (renderer-rewritten links):
+        // whatsappwork://chat?src=<percent-encoded original>.
+        if comp.scheme == "whatsappwork",
+           let src = comp.queryItems?.first(where: { $0.name == "src" })?.value,
+           let inner = URL(string: src) {
+            return parseWhatsAppChatLink(inner)
+        }
         let items = comp.queryItems ?? []
-        let phone = items.first(where: { $0.name == "phone" })?.value ?? ""
-        let digits = phone.filter(\.isNumber)
-        guard !digits.isEmpty else { return }
-        let jid = digits + "@s.whatsapp.net"
+        let text = items.first(where: { $0.name == "text" })?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let textOut = (text?.isEmpty == true) ? nil : text
+
+        let phoneDigits: String?
+        switch comp.scheme {
+        case "whatsapp", "whatsappwork":
+            phoneDigits = items.first(where: { $0.name == "phone" })?.value
+        case "https", "http":
+            switch comp.host {
+            case "wa.me", "www.wa.me":
+                // Path form: wa.me/<digits> — digits live in the path.
+                phoneDigits = comp.path.split(separator: "/").first.map(String.init)
+            case "api.whatsapp.com", "www.api.whatsapp.com":
+                phoneDigits = items.first(where: { $0.name == "phone" })?.value
+            default:
+                phoneDigits = nil
+            }
+        default:
+            phoneDigits = nil
+        }
+        guard let raw = phoneDigits else { return nil }
+        let digits = raw.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return (digits, textOut)
+    }
+
+    /// Link routing for transcript taps: WhatsApp "Continue to Chat" links
+    /// open in-app (chat + prefill); everything else goes to the browser.
+    func openLink(_ url: URL) {
+        if Self.parseWhatsAppChatLink(url) != nil {
+            Task { await handleWhatsAppLink(url) }
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func handleWhatsAppLink(_ url: URL) async {
+        guard let parsed = Self.parseWhatsAppChatLink(url) else { return }
+        let jid = parsed.digits + "@s.whatsapp.net"
 
         if chats.first(where: { $0.jid == jid }) == nil && serverChats[jid] == nil {
-            chats.insert(Chat(jid: jid, kind: "direct", display_name: "+" + digits,
+            chats.insert(Chat(jid: jid, kind: "direct", display_name: "+" + parsed.digits,
                               last_message_ts: 0, last_preview: "", unread_count: 0,
                               mentioned_unread: 0, is_pinned: false, is_muted: false),
                          at: 0)
@@ -2520,9 +2667,9 @@ final class AppState: ObservableObject {
             await applyFilter("all")
         }
         await open(jid, source: .deepLink)
-        if let text = items.first(where: { $0.name == "text" })?.value,
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let text = parsed.text {
             draftStore[jid] = text
+            draftPrefillRequest += 1
             composerFocusRequest += 1
         }
     }

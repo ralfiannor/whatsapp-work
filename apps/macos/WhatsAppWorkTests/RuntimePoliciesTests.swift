@@ -4448,6 +4448,7 @@ private final class RuntimeEndpointProbe {
     private(set) var textRequests: [RuntimeTextRequest] = []
     private(set) var messageChats: [String] = []
     private(set) var markReadChats: [String] = []
+    private(set) var markReadReceipts: [Bool] = []
     private(set) var sessionRequestCount = 0
     private(set) var contactRequestCount = 0
     private(set) var startLinkRequestCount = 0
@@ -4511,9 +4512,10 @@ private final class RuntimeEndpointProbe {
         return try await withCheckedThrowingContinuation { textWaiters[index] = $0 }
     }
 
-    func markRead(chat: String) async throws {
+    func markRead(chat: String, sendReceipt: Bool) async throws {
         calls.append("markRead:\(chat)")
         markReadChats.append(chat)
+        markReadReceipts.append(sendReceipt)
         if failMarkRead { throw RuntimeEndpointFailure.failed }
     }
 
@@ -4672,7 +4674,7 @@ private func makeAppRuntimeClient(_ endpoints: RuntimeEndpointProbe, api: APICli
         sendText: { chat, text, _, _ in
             try await endpoints.sendText(chat: chat, text: text)
         },
-        markRead: { chat in try await endpoints.markRead(chat: chat) },
+        markRead: { chat, sendReceipt in try await endpoints.markRead(chat: chat, sendReceipt: sendReceipt) },
         sendMedia: { chat, data, mime, filename, caption, replyTo in
             try await endpoints.sendMedia(
                 chat: chat,
