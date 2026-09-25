@@ -2596,16 +2596,57 @@ final class AppState: ObservableObject {
     /// wa.me "Continue to Chat" continuation) for either registered scheme.
     /// Unknown chats get a minimal local row — the server row appears on
     /// first send. `text=` lands in the composer as a focused draft.
-    func handleWhatsAppLink(_ url: URL) async {
-        guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+    /// Parses "Continue to Chat" links into (chat phone digits, prefill
+    /// text). Three shapes share one outcome: custom scheme
+    /// `whatsapp://send?phone=&text=`, `https://wa.me/<digits>?text=`
+    /// (digits in the PATH), and `https://api.whatsapp.com/send?phone=&text=`.
+    /// Anything else is not ours (nil → open externally).
+    nonisolated static func parseWhatsAppChatLink(_ url: URL) -> (digits: String, text: String?)? {
+        guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let items = comp.queryItems ?? []
-        let phone = items.first(where: { $0.name == "phone" })?.value ?? ""
-        let digits = phone.filter(\.isNumber)
-        guard !digits.isEmpty else { return }
-        let jid = digits + "@s.whatsapp.net"
+        let text = items.first(where: { $0.name == "text" })?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let textOut = (text?.isEmpty == true) ? nil : text
+
+        let phoneDigits: String?
+        switch comp.scheme {
+        case "whatsapp", "whatsappwork":
+            phoneDigits = items.first(where: { $0.name == "phone" })?.value
+        case "https", "http":
+            switch comp.host {
+            case "wa.me", "www.wa.me":
+                // Path form: wa.me/<digits> — digits live in the path.
+                phoneDigits = comp.path.split(separator: "/").first.map(String.init)
+            case "api.whatsapp.com", "www.api.whatsapp.com":
+                phoneDigits = items.first(where: { $0.name == "phone" })?.value
+            default:
+                phoneDigits = nil
+            }
+        default:
+            phoneDigits = nil
+        }
+        guard let raw = phoneDigits else { return nil }
+        let digits = raw.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return (digits, textOut)
+    }
+
+    /// Link routing for transcript taps: WhatsApp "Continue to Chat" links
+    /// open in-app (chat + prefill); everything else goes to the browser.
+    func openLink(_ url: URL) {
+        if Self.parseWhatsAppChatLink(url) != nil {
+            Task { await handleWhatsAppLink(url) }
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func handleWhatsAppLink(_ url: URL) async {
+        guard let parsed = Self.parseWhatsAppChatLink(url) else { return }
+        let jid = parsed.digits + "@s.whatsapp.net"
 
         if chats.first(where: { $0.jid == jid }) == nil && serverChats[jid] == nil {
-            chats.insert(Chat(jid: jid, kind: "direct", display_name: "+" + digits,
+            chats.insert(Chat(jid: jid, kind: "direct", display_name: "+" + parsed.digits,
                               last_message_ts: 0, last_preview: "", unread_count: 0,
                               mentioned_unread: 0, is_pinned: false, is_muted: false),
                          at: 0)
@@ -2615,8 +2656,7 @@ final class AppState: ObservableObject {
             await applyFilter("all")
         }
         await open(jid, source: .deepLink)
-        if let text = items.first(where: { $0.name == "text" })?.value,
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let text = parsed.text {
             draftStore[jid] = text
             composerFocusRequest += 1
         }

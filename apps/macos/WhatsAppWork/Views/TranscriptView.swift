@@ -49,6 +49,15 @@ struct TranscriptView: View {
         }
         // Appearance lives at RootView (app-wide dark); no per-view override.
         .background(Color(white: 0.07))
+        // Transcript links route in-app when they are WhatsApp "Continue
+        // to Chat" links (wa.me / api.whatsapp.com / whatsapp://send —
+        // chat opens with the ?text= prefilled); everything else opens in
+        // the browser as before. Applies to Text links inside MessageList
+        // without touching the Equatable wall.
+        .environment(\.openURL, OpenURLAction { url in
+            state.openLink(url)
+            return .handled
+        })
         .sheet(isPresented: previewBinding) { ImagePreviewSheet() }
         // Delete confirmation lives OUTSIDE the MessageList Equatable wall:
         // inside it, deleteTarget changes either skip the list body (alert
