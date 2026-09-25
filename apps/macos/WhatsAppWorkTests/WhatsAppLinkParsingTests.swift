@@ -42,3 +42,20 @@ final class WhatsAppLinkParsingTests: XCTestCase {
         XCTAssertNil(AppState.parseWhatsAppChatLink(url))
     }
 }
+
+final class RoutableLinkRewriteTests: XCTestCase {
+    func testWhatsAppChatLinkRewrittenToOwnScheme() throws {
+        let url = try XCTUnwrap(URL(string: "https://wa.me/6285172277259?text=vote%2052831206"))
+        let wrapped = MessageTextRenderer.routableLinkURL(url)
+        XCTAssertEqual(wrapped.scheme, "whatsappwork")
+        // Round-trips through the parser (this is the path a click takes).
+        let parsed = AppState.parseWhatsAppChatLink(wrapped)
+        XCTAssertEqual(parsed?.digits, "6285172277259")
+        XCTAssertEqual(parsed?.text, "vote 52831206")
+    }
+
+    func testExternalURLKeptVerbatim() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/x?y=1"))
+        XCTAssertEqual(MessageTextRenderer.routableLinkURL(url), url)
+    }
+}

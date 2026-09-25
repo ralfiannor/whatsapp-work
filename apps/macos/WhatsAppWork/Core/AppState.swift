@@ -2603,6 +2603,13 @@ final class AppState: ObservableObject {
     /// Anything else is not ours (nil → open externally).
     nonisolated static func parseWhatsAppChatLink(_ url: URL) -> (digits: String, text: String?)? {
         guard let comp = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // Unwrap our transcript routing form (renderer-rewritten links):
+        // whatsappwork://chat?src=<percent-encoded original>.
+        if comp.scheme == "whatsappwork",
+           let src = comp.queryItems?.first(where: { $0.name == "src" })?.value,
+           let inner = URL(string: src) {
+            return parseWhatsAppChatLink(inner)
+        }
         let items = comp.queryItems ?? []
         let text = items.first(where: { $0.name == "text" })?.value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
