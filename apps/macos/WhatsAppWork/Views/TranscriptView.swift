@@ -697,6 +697,14 @@ struct ComposerBar: View {
         .onChange(of: state.composerFocusRequest) { _, _ in
             fieldFocused = true
         }
+        .onChange(of: state.draftPrefillRequest) { _, _ in
+            // wa.me ?text= prefill landed after open(); pick it up even
+            // when chatJID didn't change (chat already open).
+            let stored = state.draftStore[chatJID] ?? ""
+            if draft != stored {
+                draft = stored
+            }
+        }
         .onChange(of: fieldFocused) { _, focused in
             // The ⌘V dispatcher (replaced Edit>Paste command) needs to know
             // whether the composer is the paste target.

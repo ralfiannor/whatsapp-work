@@ -63,6 +63,10 @@ final class AppState: ObservableObject {
     @Published var unreadBoundaries: [String: UnreadBoundary] = [:]
     /// Bump to move keyboard focus into the composer (R key / reply flow).
     @Published var composerFocusRequest = 0
+    /// Bumped after draftStore gains programmatic text (wa.me ?text=
+    /// prefill) — the composer re-reads the store on change; draftStore
+    /// itself is not published (keystrokes stay view-local).
+    @Published var draftPrefillRequest = 0
     /// Per-chat composer drafts (not published: keystrokes must stay inside
     /// ComposerBar). Switching chats preserves, returning restores.
     var draftStore: [String: String] = [:]
@@ -2665,6 +2669,7 @@ final class AppState: ObservableObject {
         await open(jid, source: .deepLink)
         if let text = parsed.text {
             draftStore[jid] = text
+            draftPrefillRequest += 1
             composerFocusRequest += 1
         }
     }
