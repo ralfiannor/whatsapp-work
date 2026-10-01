@@ -104,7 +104,14 @@ struct ChatListView: View {
             }
         }
         .onChange(of: state.selectedChat) { _, jid in
-            if let jid { Task { await state.loadSelectedChat(jid) } }
+            guard let jid else { return }
+            let browsing = state.consumeSelectionBrowsing()
+            Task {
+                await state.loadSelectedChat(jid)
+                if !browsing {
+                    await state.commitRead(jid, source: .selectionChange)
+                }
+            }
         }
         .onAppear { finishLaunchAtLoadedRunLoopProxy() }
         .onChange(of: state.chatsLoaded) { _, loaded in
@@ -166,6 +173,7 @@ struct ChatListView: View {
         case let idx?: next = min(max(idx + delta, 0), state.chats.count - 1)
         case nil: next = delta > 0 ? 0 : state.chats.count - 1
         }
+        state.markSelectionBrowsing()
         state.selectedChat = state.chats[next].jid
         return .handled
     }

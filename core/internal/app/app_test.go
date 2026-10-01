@@ -7,8 +7,9 @@
 package app_test
 
 import (
-	"strings"
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,16 +34,18 @@ type mediaSent struct {
 }
 
 type fakeWA struct {
-	mu       sync.Mutex
-	evCh     chan core.RawEvent
-	sendErr  error
-	sent     []sentCall
-	marked   []markCall
-	media    []mediaSent
-	reacts   []reactCall
-	logouts  int
-	links    int
-	loggedIn bool
+	mu        sync.Mutex
+	evCh      chan core.RawEvent
+	sendErr   error
+	sent      []sentCall
+	marked    []markCall
+	media     []mediaSent
+	reacts    []reactCall
+	revokes   []revokeCall
+	revokeErr error
+	logouts   int
+	links     int
+	loggedIn  bool
 	// usync directory answers (jid -> verified business name).
 	userNames map[string]string
 }
@@ -57,6 +60,9 @@ type markCall struct {
 }
 type reactCall struct {
 	chat, target, emoji string
+}
+type revokeCall struct {
+	chat, id string
 }
 
 func newFakeWA() *fakeWA { return &fakeWA{evCh: make(chan core.RawEvent, 64)} }
@@ -142,6 +148,13 @@ func (f *fakeWA) MarkRead(ctx context.Context, chat, sender string, ids []string
 	f.marked = append(f.marked, markCall{chat, sender, ids})
 	f.mu.Unlock()
 	return nil
+}
+
+func (f *fakeWA) RevokeMessage(ctx context.Context, chat, id string) error {
+	f.mu.Lock()
+	f.revokes = append(f.revokes, revokeCall{chat, id})
+	f.mu.Unlock()
+	return f.revokeErr
 }
 
 func (f *fakeWA) push(ev core.RawEvent) { f.evCh <- ev }
@@ -334,7 +347,7 @@ func TestMarkChatReadSendsReceipts(t *testing.T) {
 	waitFor(t, sub, "message.received")
 	waitFor(t, sub, "message.received") // both must be durable before reading
 
-	if err := a.MarkChatRead(context.Background(), alice); err != nil {
+	if err := a.MarkChatRead(context.Background(), alice, true); err != nil {
 		t.Fatal(err)
 	}
 	fw.mu.Lock()
@@ -407,5 +420,148 @@ func TestSendMediaPersistsAndEmits(t *testing.T) {
 	}
 	if row.Media == nil || row.Media.Size != int64(len(img)) {
 		t.Fatalf("persisted media lost: %+v", row.Media)
+	}
+}
+
+func TestDeleteMessageRevokesOwnRow(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	sent, err := a.SendText(context.Background(), alice, "oops", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, sub, "message.received")
+
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	if len(fw.revokes) != 1 || fw.revokes[0].chat != alice || fw.revokes[0].id != "SRVoops" {
+		fw.mu.Unlock()
+		t.Fatalf("revoke calls = %+v", fw.revokes)
+	}
+	fw.mu.Unlock()
+	waitFor(t, sub, "message.updated")
+	// Sidebar refresh: SetRevoked cleared last_preview, the chat row event
+	// must reach the client too (message-then-chat, as in SendText).
+	waitFor(t, sub, "chat.updated")
+
+	m, err := st.GetMessage(context.Background(), sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Revoked || m.Text != "" {
+		t.Fatalf("row not revoked: %+v", m)
+	}
+
+	// Idempotent: an already-revoked row is a no-op, no second wire call.
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.revokes) != 1 {
+		t.Fatalf("second delete hit the wire: %+v", fw.revokes)
+	}
+}
+
+func TestDeleteMessageRejectsIncoming(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	fw.push(incomingMsg("m9", alice, alice, "hello"))
+	waitFor(t, sub, "message.received")
+	msgs, _ := st.ListMessages(context.Background(), alice, 0, 0, 10)
+	if len(msgs) != 1 {
+		t.Fatalf("ingest: %+v", msgs)
+	}
+
+	if err := a.DeleteMessage(context.Background(), msgs[0].ID); !errors.Is(err, app.ErrNotOwnMessage) {
+		t.Fatalf("want ErrNotOwnMessage, got %v", err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.revokes) != 0 {
+		t.Fatalf("incoming row hit the wire: %+v", fw.revokes)
+	}
+}
+
+func TestDeleteMessageWAFailureLeavesRowIntact(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	sent, _ := a.SendText(context.Background(), alice, "boom", nil, nil)
+	waitFor(t, sub, "message.received")
+
+	fw.mu.Lock()
+	fw.revokeErr = errors.New("net down")
+	fw.mu.Unlock()
+	if err := a.DeleteMessage(context.Background(), sent.ID); err == nil {
+		t.Fatal("want error")
+	}
+	m, _ := st.GetMessage(context.Background(), sent.ID)
+	if m.Revoked || m.Text != "boom" {
+		t.Fatalf("row must stay intact on wire failure: %+v", m)
+	}
+
+	// Recovery: same row deletes fine once the wire works again.
+	fw.mu.Lock()
+	fw.revokeErr = nil
+	fw.mu.Unlock()
+	if err := a.DeleteMessage(context.Background(), sent.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteMessageNotFound(t *testing.T) {
+	a, _, _, _ := newTestApp(t)
+	if err := a.DeleteMessage(context.Background(), 999999); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("want storage.ErrNotFound, got %v", err)
+	}
+}
+
+func TestMarkChatReadLocalOnlyClearsWithoutReceipt(t *testing.T) {
+	a, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	fw.push(incomingMsg("m1", alice, alice, "one"))
+	waitFor(t, sub, "message.received")
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 1 {
+		t.Fatalf("unread before = %d", c.UnreadCount)
+	}
+
+	if err := a.MarkChatRead(context.Background(), alice, false); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	if len(fw.marked) != 0 {
+		fw.mu.Unlock()
+		t.Fatalf("local-only read sent receipts: %+v", fw.marked)
+	}
+	fw.mu.Unlock()
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 0 {
+		t.Fatalf("unread after = %d", c.UnreadCount)
+	}
+	waitFor(t, sub, "chat.updated")
+
+	// Traffic after the local read still bumps the badge. The fixture must
+	// arrive past the advanced read position (unread = timestamp > last_read_ts).
+	fw.push(incomingMsgAt("m2", alice, "two", 1700000200))
+	waitFor(t, sub, "message.received")
+	if c, _ := st.GetChat(context.Background(), alice); c.UnreadCount != 1 {
+		t.Fatalf("unread after new incoming = %d", c.UnreadCount)
+	}
+}
+
+func TestMarkChatReadLocalOnlyNoUnreadIsNoop(t *testing.T) {
+	a, fw, _, _ := newTestApp(t)
+	if err := a.MarkChatRead(context.Background(), alice, false); err != nil {
+		t.Fatal(err)
+	}
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if len(fw.marked) != 0 {
+		t.Fatalf("noop read sent receipts: %+v", fw.marked)
 	}
 }

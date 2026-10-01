@@ -75,6 +75,23 @@ func parseWhatsApp(_ raw: String) -> [WAToken] {
 enum MessageTextRenderer {
     static let linkDetector = try? NSDataDetector(
         types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Link routing: macOS SwiftUI Text links do not reliably honor the
+    /// \.openURL environment (clicks go straight from the AppKit text
+    /// system to NSWorkspace), so WhatsApp "Continue to Chat" links are
+    /// rewritten to OUR registered custom scheme — clicking routes the URL
+    /// back into this app via onOpenURL instead of the browser. Every
+    /// other URL keeps its destination. Unwrapping happens in
+    /// AppState.parseWhatsAppChatLink (src query param).
+    static func routableLinkURL(_ url: URL) -> URL {
+        guard AppState.parseWhatsAppChatLink(url) != nil,
+              let encoded = url.absoluteString
+                .addingPercentEncoding(withAllowedCharacters: .alphanumerics),
+              let wrapped = URL(string: "whatsappwork://chat?src=\(encoded)") else {
+            return url
+        }
+        return wrapped
+    }
 }
 
 // MARK: - mIRC-style line rendering
@@ -130,11 +147,9 @@ struct IRCLineText: View {
     }
 
     private var attributed: AttributedString {
-        // v9 key: includes the contact-name version and the font size —
-        // both re-shape the attributed string (mentions re-resolve after
-        // contacts load; typography changes re-style every run) — plus the
-        // forwarded flag, which adds a leading marker run.
-        let key = "v9|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(state.contactNamesVersion)"
+        // v10 key: adds the wa.me link-rewrite (v9 inputs unchanged) —
+        // same message, different link destinations after the routing fix.
+        let key = "v10|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(state.contactNamesVersion)"
         if let hit = Self.cache[key] {
             return hit
         }
@@ -297,7 +312,7 @@ struct IRCLineText: View {
                     segment.backgroundColor = Color.primary.opacity(0.07)
                 }
                 if let url {
-                    segment.link = url
+                    segment.link = MessageTextRenderer.routableLinkURL(url)
                     segment.foregroundColor = linkColor
                     segment.underlineStyle = .single
                     out += segment

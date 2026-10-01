@@ -473,7 +473,8 @@ final class InteractionPoliciesTests: XCTestCase {
     func testOnlyExplicitNavigationSourcesAcknowledgeRead() {
         XCTAssertFalse(ChatOpenSource.keyboardSelection.acknowledgesRead)
         for source in [ChatOpenSource.enter, .mouse, .transcriptFocus,
-                       .composerFocus, .search, .inbox, .notification, .deepLink] {
+                       .composerFocus, .selectionChange, .search, .inbox,
+                       .notification, .deepLink] {
             XCTAssertTrue(source.acknowledgesRead, "\(source) should acknowledge")
         }
     }

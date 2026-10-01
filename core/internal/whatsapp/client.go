@@ -343,11 +343,24 @@ func (c *Client) SendText(ctx context.Context, chatJID, text string, reply *core
 	c.log.Info("whatsapp: send text", "chat", chatJID,
 		"mentions_in", mentioned, "mentions_wire", wireMentions,
 		"group_lid_space", to.Server == types.GroupServer && strings.Contains(to.User, "-"))
-	resp, err := c.cli.SendMessage(ctx, to, c.buildText(rewriteMentionTokens(text, wireMentions), reply, wireMentions))
+	resp, err := c.cli.SendMessage(ctx, to, c.buildText(mentionWireText(to, text, wireMentions), reply, wireMentions))
 	if err != nil {
 		return core.SendAck{}, fmt.Errorf("whatsapp: send: %w", err)
 	}
 	return core.SendAck{MessageID: resp.ID, Timestamp: resp.Timestamp.Unix()}, nil
+}
+
+// mentionWireText gates the positional token rewrite to LID-space groups.
+// The composer already sends identity-digit tokens for every group; the
+// word-boundary swallow below cannot know where a multi-word display label
+// ends — applied outside LID space it corrupted labels on receivers
+// ("@Nura Biks" became "@digits Biks", the receiver re-rendering the digits
+// as the full name plus the swallowed tail).
+func mentionWireText(chat types.JID, text string, wireMentions []string) string {
+	if chat.Server != types.GroupServer || !strings.Contains(chat.User, "-") {
+		return text
+	}
+	return rewriteMentionTokens(text, wireMentions)
 }
 
 // mentionJIDsForWire rewrites mentioned JIDs into the group's own identity
@@ -541,6 +554,21 @@ func (c *Client) MarkRead(ctx context.Context, chatJID, senderJID string, messag
 	}
 	if err := c.cli.MarkRead(ctx, messageIDs, time.Now(), chat, sender); err != nil {
 		return fmt.Errorf("whatsapp: mark read: %w", err)
+	}
+	return nil
+}
+
+// RevokeMessage sends a protocol-level revoke for one of our own messages
+// (delete-for-everyone). Own messages revoke with an empty sender JID —
+// BuildRevoke/BuildMessageKey fills FromMe and the group participant.
+func (c *Client) RevokeMessage(ctx context.Context, chatJID, messageID string) error {
+	chat, err := types.ParseJID(chatJID)
+	if err != nil || chat.IsEmpty() {
+		return fmt.Errorf("whatsapp: bad chat jid %q", chatJID)
+	}
+	msg := c.cli.BuildRevoke(chat, types.EmptyJID, messageID)
+	if _, err := c.cli.SendMessage(ctx, chat, msg); err != nil {
+		return fmt.Errorf("whatsapp: revoke: %w", err)
 	}
 	return nil
 }

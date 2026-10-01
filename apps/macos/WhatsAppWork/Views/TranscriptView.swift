@@ -49,7 +49,30 @@ struct TranscriptView: View {
         }
         // Appearance lives at RootView (app-wide dark); no per-view override.
         .background(Color(white: 0.07))
+        // Transcript links route in-app when they are WhatsApp "Continue
+        // to Chat" links (wa.me / api.whatsapp.com / whatsapp://send —
+        // chat opens with the ?text= prefilled); everything else opens in
+        // the browser as before. Applies to Text links inside MessageList
+        // without touching the Equatable wall.
+        .environment(\.openURL, OpenURLAction { url in
+            state.openLink(url)
+            return .handled
+        })
         .sheet(isPresented: previewBinding) { ImagePreviewSheet() }
+        // Delete confirmation lives OUTSIDE the MessageList Equatable wall:
+        // inside it, deleteTarget changes either skip the list body (alert
+        // never presents) or force the wall to watch all of AppState.
+        .alert("Delete for everyone?", isPresented: Binding(
+            get: { state.deleteTarget != nil },
+            set: { if !$0 { state.deleteTarget = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let m = state.deleteTarget { Task { await state.deleteMessage(m) } }
+                state.deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) { state.deleteTarget = nil }
+        } message: {
+            Text("The message will be removed for everyone in this chat.")
+        }
         .onAppear { recomputeNickColumn() }
         .onChange(of: messages.count) { _, _ in recomputeNickColumn() }
         .onChange(of: state.contactNames) { _, _ in
@@ -628,9 +651,9 @@ struct ComposerBar: View {
     let chatJID: String
     @EnvironmentObject var state: AppState
     @State private var draft = ""
-    @FocusState private var fieldFocused: Bool
-    /// Picked-but-not-sent image. Two-step attach: paperclip only picks,
-    /// the user types a caption, ⌘Enter / send ships them together.
+    @State private var fieldFocused = false
+    /// Picked-but-not-sent file. Two-step attach: paperclip only picks,
+    /// the user types a caption, Enter / send ships them together.
     @State private var attachmentURL: URL?
     @StateObject private var mediaSubmitAction = ComposerMediaSubmitAction()
     @State private var mentionMembers: [APIClient.GroupMember] = []
@@ -673,6 +696,14 @@ struct ComposerBar: View {
         }
         .onChange(of: state.composerFocusRequest) { _, _ in
             fieldFocused = true
+        }
+        .onChange(of: state.draftPrefillRequest) { _, _ in
+            // wa.me ?text= prefill landed after open(); pick it up even
+            // when chatJID didn't change (chat already open).
+            let stored = state.draftStore[chatJID] ?? ""
+            if draft != stored {
+                draft = stored
+            }
         }
         .onChange(of: fieldFocused) { _, focused in
             // The ⌘V dispatcher (replaced Edit>Paste command) needs to know
@@ -793,7 +824,7 @@ struct ComposerBar: View {
 
     /// Two-step attach: the panel only PICKS (any file — documents, video,
     /// audio, images; the core maps the MIME to the right WhatsApp kind).
-    /// Caption is typed afterwards in the normal composer; ⌘Enter (or the
+    /// Caption is typed afterwards in the normal composer; Enter (or the
     /// plane) ships file + text together.
     private func pickFile() {
         let panel = NSOpenPanel()
@@ -804,11 +835,13 @@ struct ComposerBar: View {
     }
 
     /// Shared attach path for picker and clipboard paste: stage the file and
-    /// drop the caret into the caption field.
+    /// drop the caret into the caption field. Bumping the focus request
+    /// (instead of setting fieldFocused directly) is what actually focuses
+    /// the NSTextView via MentionTextView's focusRequest.
     private func attach(url: URL) {
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
         attachmentURL = url
-        fieldFocused = true
+        state.composerFocusRequest += 1
     }
 
     private func removeAttachment() {
@@ -821,19 +854,40 @@ struct ComposerBar: View {
             if !mentionSuggestions.isEmpty {
                 mentionPopup
             }
-            TextField("Message…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($fieldFocused)
-                .font(.system(size: 12.5, design: .monospaced))
-                .lineLimit(1...5)
-                .padding(6)
-                .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary.opacity(0.35)))
-                .onSubmit { submitFromKeyboard() }
+            ZStack(alignment: .topLeading) {
+                MentionTextView(
+                    text: $draft,
+                    resolvedLabels: Array(state.mentionTargets.values),
+                    font: .monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                    enterInterceptor: {
+                        // Enter with the popup open accepts the first match.
+                        if let first = mentionSuggestions.first {
+                            acceptMention(first)
+                            return true
+                        }
+                        return false
+                    },
+                    onEnter: { submitFromKeyboard() },
+                    onFocusChange: { fieldFocused = $0 },
+                    focusRequest: state.composerFocusRequest
+                )
+                // Placeholder: an NSTextView has none of its own. Offsets
+                // mirror TextKit's line-fragment padding.
+                if draft.isEmpty {
+                    Text("Message…")
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(EdgeInsets(top: 3, leading: 10, bottom: 0, trailing: 10))
+                        .allowsHitTesting(false)
+                }
+            }
+            .padding(6)
+            .background(RoundedRectangle(cornerRadius: 2).fill(.quaternary.opacity(0.35)))
         }
     }
 
-    /// Popup: click a row, Tab accepts the first (multiline composer means
-    /// Return inserts a newline), Esc dismisses.
+    /// Popup: click a row, Tab or Return accepts the first match, Esc
+    /// dismisses (Return is intercepted while the popup is open).
     private var mentionPopup: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(mentionSuggestions.enumerated()), id: \.element.jid) { idx, m in
@@ -1192,6 +1246,11 @@ struct MessageBubble: View {
                     NSPasteboard.general.setString(text, forType: .string)
                 }
             }
+            // id > 0: optimistic temp rows have negative ids — the server
+            // has no message to revoke, Delete would 404.
+            if message.from_me && !message.revoked && message.id > 0 {
+                Button("Delete…") { state.requestDeleteMessage(message) }
+            }
             if message.chat_jid.hasSuffix("@g.us") && !message.from_me {
                 Button("Mention @\(state.ircNick(for: message))") {
                     state.insertMention(from: message)
@@ -1304,39 +1363,7 @@ struct MediaBubble: View {
                 await state.ensureMedia(message)
                 return
             }
-            guard let client = state.apiClient,
-                  let (data, _) = try? await client.mediaData(rowID: message.id) else {
-                state.toast = "Media fetch failed"
-                return
-            }
-            // Suggested name: the document's own filename; the extension
-            // fallback derives from the stored MIME type via UTType — never
-            // from the HTTP Content-Type, whose pathExtension is always "".
-            let provided = media.filename.flatMap { $0.isEmpty ? nil : $0 }?
-                .replacingOccurrences(of: "/", with: "_")
-            let fallback = "\(media.kind.capitalized)-\(message.id)"
-            let nameExt = provided.map { ($0 as NSString).pathExtension } ?? ""
-            let ext = !nameExt.isEmpty
-                ? nameExt
-                : UTType(mimeType: media.mime)?.preferredFilenameExtension ?? "bin"
-            let base = ((provided ?? fallback) as NSString).deletingPathExtension
-            let panel: NSSavePanel = {
-                let p = NSSavePanel()
-                p.title = "Save Media"
-                p.nameFieldStringValue = nameExt.isEmpty ? "\(base).\(ext)" : (provided ?? fallback)
-                p.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                return p
-            }()
-            guard let window = NSApp.keyWindow ?? NSApp.windows.first,
-                  await panel.beginSheetModal(for: window) == .OK,
-                  let dest = panel.url else { return }
-            do {
-                try data.write(to: dest)
-                state.toast = "Saved \(dest.lastPathComponent)"
-                NSWorkspace.shared.selectFile(dest.path, inFileViewerRootedAtPath: dest.deletingLastPathComponent().path)
-            } catch {
-                state.toast = "Save failed: \(error.localizedDescription)"
-            }
+            await state.saveMediaToDisk(message)
         }
     }
 
@@ -1677,6 +1704,12 @@ struct ImagePreviewSheet: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        Task { await state.saveMediaToDisk(preview.message) }
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .help("Save image to disk")
                     Button("Close") { state.previewImage = nil }
                         .keyboardShortcut(.cancelAction)
                 }

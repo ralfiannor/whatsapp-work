@@ -144,6 +144,10 @@ func (a *App) MediaFileInfo(ctx context.Context, rowID int64) (string, string, e
 
 var errMediaUnavailable = fmt.Errorf("media service unavailable")
 
+// ErrNotOwnMessage rejects delete-for-everyone attempts on rows the
+// account did not send (admin deletes are out of scope).
+var ErrNotOwnMessage = errors.New("app: not an own message")
+
 // Run starts the ingest loop and a slow name-resolution ticker (the LID→PN
 // table refills organically from live traffic; old rows get rewritten as the
 // mapping grows). Returns immediately; loops exit when ctx is cancelled.
@@ -1169,9 +1173,53 @@ func (a *App) React(ctx context.Context, rowID int64, emoji string) error {
 	return nil
 }
 
-// MarkChatRead sends read receipts for unread incoming messages (grouped by
-// sender, as the protocol requires) and clears the chat's counters.
-func (a *App) MarkChatRead(ctx context.Context, chatJID string) error {
+// DeleteMessage revokes the caller's own message ("delete for everyone"):
+// send the protocol revoke, then tombstone the local row. Non-own rows are
+// rejected, already-revoked rows are a no-op, and a wire failure leaves the
+// row untouched so the user can retry.
+func (a *App) DeleteMessage(ctx context.Context, rowID int64) error {
+	m, err := a.store.GetMessage(ctx, rowID)
+	if err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	if !m.FromMe {
+		return ErrNotOwnMessage
+	}
+	if m.Revoked {
+		return nil
+	}
+	if err := a.wa.RevokeMessage(ctx, m.ChatJID, m.MessageID); err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	if err := a.store.SetRevoked(ctx, m.ChatJID, m.MessageID, m.SenderJID, m.Timestamp); err != nil {
+		return fmt.Errorf("app: delete: %w", err)
+	}
+	a.emitMessageUpdated(ctx, m.ChatJID, m.MessageID)
+	// SetRevoked may clear chats.last_preview (deleted row was the newest):
+	// the sidebar needs the refreshed chat row, not just the tombstoned message.
+	a.emitChatUpdated(ctx, m.ChatJID)
+	return nil
+}
+
+// MarkChatRead clears a chat's unread state. With sendReceipt it first
+// delivers WhatsApp read receipts grouped by sender (on failure the local
+// position is kept so the next attempt retries the same ids); without, it
+// advances the local position only — privacy mode for direct chats.
+func (a *App) MarkChatRead(ctx context.Context, chatJID string, sendReceipt bool) error {
+	if !sendReceipt {
+		maxTS, err := a.store.MaxUnreadIncomingTS(ctx, chatJID)
+		if err != nil {
+			return err
+		}
+		if maxTS == 0 {
+			return nil // nothing unread; counters already consistent
+		}
+		if err := a.store.MarkChatRead(ctx, chatJID, maxTS); err != nil {
+			return err
+		}
+		a.emitChatUpdated(ctx, chatJID)
+		return nil
+	}
 	unread, err := a.store.UnreadIncoming(ctx, chatJID, 200)
 	if err != nil {
 		return err

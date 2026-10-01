@@ -22,6 +22,9 @@ type WAClient interface {
 	React(ctx context.Context, chatJID string, target MessageRef, emoji string) error
 	// MarkRead sends read receipts for messages of one sender in one chat.
 	MarkRead(ctx context.Context, chatJID, senderJID string, messageIDs []string) error
+	// RevokeMessage deletes the caller's own message for everyone
+	// ("delete for everyone"); messageID is the WhatsApp stanza id.
+	RevokeMessage(ctx context.Context, chatJID, messageID string) error
 	Events() <-chan RawEvent
 	GroupMembers(ctx context.Context, groupJID string) ([]GroupMember, error)
 	// ProfilePicture returns the user's profile-photo CDN URL ("" when the
