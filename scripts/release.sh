@@ -9,13 +9,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAC="$ROOT/apps/macos"
 VERSION="$(sed -n 's/^ *MARKETING_VERSION: *"\(.*\)"$/\1/p' "$MAC/project.yml")"
-[ -n "$VERSION" ] || { echo "release: MARKETING_VERSION not found in project.yml" >&2; exit 1; }
+BUILD="$(sed -n 's/^ *CURRENT_PROJECT_VERSION: *"\(.*\)"$/\1/p' "$MAC/project.yml")"
+[ -n "$VERSION" ] && [ -n "$BUILD" ] || {
+  echo "release: MARKETING_VERSION / CURRENT_PROJECT_VERSION not found in project.yml" >&2; exit 1; }
 
 "$ROOT/scripts/build-core.sh"
 if command -v xcodegen >/dev/null; then (cd "$MAC" && xcodegen generate); fi
 # project.yml is the source of truth even if the generated project is stale.
 (cd "$MAC" && xcodebuild -quiet -scheme WhatsAppWork -configuration Release \
-  -derivedDataPath build/DerivedData-release MARKETING_VERSION="$VERSION" build)
+  -derivedDataPath build/DerivedData-release \
+  MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" build)
 APP="$MAC/build/DerivedData-release/Build/Products/Release/WhatsApp Work.app"
 PLIST="$APP/Contents/Info.plist"
 
