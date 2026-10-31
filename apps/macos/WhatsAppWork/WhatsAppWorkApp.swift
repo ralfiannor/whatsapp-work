@@ -13,6 +13,11 @@ struct WhatsAppWorkApp: App {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// Hosted unit tests launch this app; XCTest marks the host's environment.
+    static func isUnitTestHost(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -185,6 +190,10 @@ struct RootView: View {
         }
         .onAppear {
             AppDelegate.state = state
+            // Booting a test host would spawn a real core on the developer's
+            // data dir, and orphan reclaim would kill the core of any running
+            // copy of the app to take the lock.
+            guard !WhatsAppWorkApp.isUnitTestHost() else { return }
             state.boot()
         }
     }

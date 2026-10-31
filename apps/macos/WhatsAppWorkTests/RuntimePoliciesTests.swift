@@ -798,6 +798,13 @@ final class RuntimePoliciesTests: XCTestCase {
         sidecar.stopBlocking()
     }
 
+    func testUnitTestHostIsDetectedSoTheAppDoesNotBootARealCore() {
+        // This test runs inside the host app, so the live environment must
+        // read as a test host; a normal launch has no XCTest marker.
+        XCTAssertTrue(WhatsAppWorkApp.isUnitTestHost())
+        XCTAssertFalse(WhatsAppWorkApp.isUnitTestHost([:]))
+    }
+
     @MainActor
     func testAppStateRoutesCoreSleepSignalsAndExplicitLogout() async {
         let probe = SleepAssertionProbe()
