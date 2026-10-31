@@ -7,16 +7,55 @@ struct InboxView: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        if let inbox = state.inbox {
-            if inbox.counts.total == 0 && inbox.starred_chats.isEmpty && inbox.done_recent.isEmpty {
-                zeroState
+        Group {
+            if let inbox = state.inbox {
+                if inbox.counts.total == 0 && inbox.starred_chats.isEmpty && inbox.done_recent.isEmpty {
+                    zeroState
+                } else {
+                    list(inbox)
+                }
+            } else if state.inboxLoadFailed {
+                loadFailedState
             } else {
-                list(inbox)
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .task {
+            // Fetch immediately on appear: the segmented control switches
+            // tabs without going through showInbox() (⌘4), so the panel
+            // itself must load its data — on the WHOLE panel, not the
+            // populated list, or a nil inbox spins forever. Snooze deadlines
+            // expire silently on the core (query-time rule, no timers): the
+            // slow loop resurfaces due conversations while the tab stays
+            // visible, Inbox Zero included.
+            await state.refreshInbox()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard state.sidebarTab == .inbox else { return }
+                await state.refreshInbox()
+            }
+        }
+    }
+
+    private var loadFailedState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            Text("Couldn't load the inbox").font(.title3.bold())
+            Text("The local core didn't answer. Check the status at the top of the window, then try again.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Try Again") {
+                state.inboxLoadFailed = false
+                Task { await state.refreshInbox() }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var zeroState: some View {
@@ -28,7 +67,7 @@ struct InboxView: View {
             Text("Nothing needs your attention.")
                 .font(.callout).foregroundStyle(.secondary)
             Text("Direct messages, @mentions and work-group traffic land here.\nMark a group as Work (right-click it in Chats) to route its traffic in.\nDone clears a whole conversation; reading a chat keeps it.")
-                .font(.caption).foregroundStyle(.tertiary)
+                .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -79,20 +118,6 @@ struct InboxView: View {
         }
         .listStyle(.sidebar)
         .refreshable { await state.refreshInbox() }
-        .task {
-            // Fetch immediately on appear: the segmented control switches
-            // tabs without going through showInbox() (⌘4), so the view
-            // itself must load its data — otherwise nil inbox = spinner
-            // forever. Snooze deadlines expire silently on the core
-            // (query-time rule, no timers): the slow loop below resurfaces
-            // due conversations while the tab stays visible.
-            await state.refreshInbox()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                guard state.sidebarTab == .inbox else { return }
-                await state.refreshInbox()
-            }
-        }
     }
 
     private func section(_ title: String, _ icon: String, _ tint: Color,
@@ -130,7 +155,7 @@ struct ConversationRow: View {
                     }
                     Spacer()
                     Text(ChatRow.timeString(conversation.last_timestamp))
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Text(snippet)
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2)
@@ -139,10 +164,23 @@ struct ConversationRow: View {
         }
         .padding(.vertical, 1)
         .contentShape(Rectangle())
-        .onTapGesture {
-            Task { await state.open(conversation.chat_jid, anchorMessageID: conversation.last_message_id, source: .inbox) }
-        }
+        .onTapGesture { openConversation() }
         .contextMenu { menu }
+        // Tap-only row: give assistive tech the button role and the same
+        // actions the inline icons and context menu offer.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { openConversation() }
+        .accessibilityAction(named: "Mark done") {
+            Task { _ = await state.markConversationDone(conversation) }
+        }
+        .accessibilityAction(named: "Snooze 1 hour") {
+            Task { _ = await state.snoozeConversation(conversation, until: AppState.snoozeOneHour, label: "1 hour") }
+        }
+    }
+
+    private func openConversation() {
+        Task { await state.open(conversation.chat_jid, anchorMessageID: conversation.last_message_id, source: .inbox) }
     }
 
     private var snippet: String {
@@ -174,6 +212,7 @@ struct ConversationRow: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private var menu: some View {
@@ -187,9 +226,7 @@ struct ConversationRow: View {
             Button("Snooze until tomorrow 09:00") {
                 Task { _ = await state.snoozeConversation(conversation, until: AppState.nextMorning(), label: "tomorrow 9am") }
             }
-            Button("Open conversation") {
-                Task { await state.open(conversation.chat_jid, anchorMessageID: conversation.last_message_id, source: .inbox) }
-            }
+            Button("Open conversation") { openConversation() }
         }
     }
 
@@ -217,22 +254,20 @@ struct DoneRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 3)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.chat_name.isEmpty ? AppState.prettyJID(item.chat_jid) : item.chat_name)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Text(item.text?.isEmpty == false ? item.text! : "Media message")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .strikethrough()
                     .lineLimit(1)
             }
             Spacer()
             Button {
-                Task {
-                    _ = await state.markDone(carrier, done: false)
-                    await state.refreshInbox()
-                }
+                reopen()
             } label: {
                 Text("Reopen")
                     .font(.caption2.weight(.semibold))
@@ -243,7 +278,23 @@ struct DoneRow: View {
         }
         .padding(.vertical, 1)
         .contentShape(Rectangle())
-        .onTapGesture { Task { await state.open(item.chat_jid, anchorMessageID: item.message_id, source: .inbox) } }
+        .onTapGesture { openItem() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Done: \(item.chat_name.isEmpty ? AppState.prettyJID(item.chat_jid) : item.chat_name), \(item.text?.isEmpty == false ? item.text! : "Media message")")
+        .accessibilityAction { openItem() }
+        .accessibilityAction(named: "Reopen") { reopen() }
+    }
+
+    private func openItem() {
+        Task { await state.open(item.chat_jid, anchorMessageID: item.message_id, source: .inbox) }
+    }
+
+    private func reopen() {
+        Task {
+            _ = await state.markDone(carrier, done: false)
+            await state.refreshInbox()
+        }
     }
 
     private var carrier: Message {

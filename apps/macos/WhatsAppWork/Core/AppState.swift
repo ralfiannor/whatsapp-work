@@ -79,6 +79,9 @@ final class AppState: ObservableObject {
     @Published var mediaBusy: Set<Int64> = []
     @Published private var replyStore = ChatReplyStore()
     @Published var searchOpen = false
+    /// Log Out wipes the whole local history and media cache: every entry
+    /// point asks first (RootView presents the confirmation).
+    @Published var confirmingLogout = false
     @Published var chatFilter: String = "all" // all | unread | mentions
     /// True once any chat page has loaded: an empty list afterwards means
     /// "no matches" (empty state), not "still loading" (spinner).
@@ -122,6 +125,10 @@ final class AppState: ObservableObject {
     /// powers the nick panel and the mention autocomplete.
     @Published var chatMembers: [String: [APIClient.GroupMember]] = [:]
     @Published var inbox: Inbox?
+    /// First inbox load failed: the panel shows an error with Retry instead
+    /// of a spinner that never ends. A loaded inbox stays visible on later
+    /// refresh failures.
+    @Published var inboxLoadFailed = false
     /// Full-size preview target (image tap).
     @Published var previewImage: (image: NSImage, message: Message)?
     @Published var sendingMedia = false
@@ -249,13 +256,15 @@ final class AppState: ObservableObject {
         observeWake()
     }
 
-    /// Toast auto-dismiss: 4 s, restarted on every write; `toast = nil`
-    /// re-enters didSet but the nil guard stops the loop there.
+    /// Toast auto-dismiss, restarted on every write; `toast = nil` re-enters
+    /// didSet but the nil guard stops the loop there. 4 s minimum, longer
+    /// for long error text (~15 chars/s reading pace, capped at 10 s).
     private func scheduleToastDismiss() {
         toastDismissTask?.cancel()
-        guard toast != nil else { return }
+        guard let toast else { return }
+        let seconds = min(10, max(4, Double(toast.count) / 15))
         toastDismissTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             self?.toast = nil
         }
@@ -2465,6 +2474,37 @@ final class AppState: ObservableObject {
         return DecodedImage(image: img, bytes: cg.width * cg.height * 4)
     }
 
+    // MARK: quick actions with feedback
+
+    /// Reaction add/remove ("" removes). Failures toast — they used to
+    /// vanish behind `try?` and the reaction simply never appeared.
+    func react(rowID: Int64, emoji: String) async {
+        do {
+            guard let api else { throw CoreError.notRunning }
+            try await api.react(rowID: rowID, emoji: emoji)
+        } catch {
+            toast = "Reaction failed: \(error.localizedDescription)"
+        }
+    }
+
+    func setChatStarred(_ jid: String, starred: Bool) async {
+        do {
+            guard let api else { throw CoreError.notRunning }
+            try await api.setChatStar(jid: jid, starred: starred)
+        } catch {
+            toast = "Couldn't \(starred ? "star" : "unstar") the chat: \(error.localizedDescription)"
+        }
+    }
+
+    func setChatWork(_ jid: String, work: Bool) async {
+        do {
+            guard let api else { throw CoreError.notRunning }
+            try await api.setChatWork(jid: jid, work: work)
+        } catch {
+            toast = "Couldn't update work groups: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: work inbox
 
     func refreshInbox() async {
@@ -2472,10 +2512,12 @@ final class AppState: ObservableObject {
         guard let fresh = try? await api.inbox() else {
             // A stale failure (post-logout, sidecar restart) must not wipe
             // the visible inbox with nil.
+            if isCurrentRefreshClient(captured), inbox == nil { inboxLoadFailed = true }
             return
         }
         guard isCurrentRefreshClient(captured) else { return }
         inbox = fresh
+        inboxLoadFailed = false
     }
 
     /// Patches a loaded transcript row's work state locally, immediately —
@@ -2713,9 +2755,11 @@ final class AppState: ObservableObject {
 
     // MARK: search (⌘K)
 
-    func runSearch(_ q: String) async -> SearchResponse? {
-        guard let api, !q.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return try? await api.search(q)
+    /// Local FTS search. Throws when the core can't answer, so the overlay
+    /// can say so instead of looking like an empty query.
+    func runSearch(_ q: String) async throws -> SearchResponse {
+        guard let api else { throw CoreError.notRunning }
+        return try await api.search(q)
     }
 
     func jump(toChat jid: String, anchorMessageID: String? = nil) async {

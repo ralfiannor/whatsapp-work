@@ -72,7 +72,7 @@ struct WhatsAppWorkApp: App {
                     state.toast = "wa.me links now open in WhatsApp Work"
                 }
                 Divider()
-                Button("Log Out (wipes local data)") { Task { await state.logout() } }
+                Button("Log Out (wipes local data)…") { state.confirmingLogout = true }
             }
         }
         Settings {
@@ -174,9 +174,15 @@ struct RootView: View {
         }
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.07))
-        .overlay(alignment: .top) { ConnectionBanner() }
+        .overlay(alignment: .top) { ConnectionBanner(sidecar: state.sidecar) }
         .overlay(alignment: .bottom) { ToastView() }
         .sheet(isPresented: $state.searchOpen) { SearchOverlay() }
+        .alert("Log out and wipe local data?", isPresented: $state.confirmingLogout) {
+            Button("Log Out", role: .destructive) { Task { await state.logout() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This Mac is unlinked from WhatsApp and its local message history and media cache are deleted. Your phone keeps everything; linking again re-syncs history.")
+        }
         .onAppear {
             AppDelegate.state = state
             state.boot()
@@ -190,33 +196,52 @@ struct ToastView: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        if let toast = state.toast {
-            Text(toast)
-                .font(.system(size: 11.5, design: .monospaced))
-                .lineLimit(2)
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Capsule().fill(.regularMaterial)
-                    .overlay(Capsule().strokeBorder(.quaternary)))
-                .foregroundStyle(.primary)
-                .padding(.bottom, 14)
-                .transition(.opacity)
-                .accessibilityLabel("Notification: \(toast)")
+        Group {
+            if let toast = state.toast {
+                Text(toast)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .lineLimit(2)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(.regularMaterial)
+                        .overlay(Capsule().strokeBorder(.quaternary)))
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+                    .accessibilityLabel("Notification: \(toast)")
+            }
+        }
+        // A toast appearing elsewhere on screen is invisible to VoiceOver
+        // unless announced; errors must not be sight-only.
+        .onChange(of: state.toast) { _, toast in
+            guard let toast else { return }
+            AccessibilityNotification.Announcement(toast).post()
         }
     }
 }
 
+/// Top-center status capsule. Core (sidecar) trouble outranks connection
+/// state: a core that failed to start used to leave only an endless
+/// "Connecting…" spinner with no reason and no way out but quitting.
 struct ConnectionBanner: View {
     @EnvironmentObject var state: AppState
+    @ObservedObject var sidecar: SidecarManager
 
     var body: some View {
         Group {
-            switch state.connectionState {
-            case "connecting", "offline":
-                banner("Reconnecting…", color: .orange)
-            case "linking":
-                banner("Waiting for QR scan…", color: .blue)
+            switch sidecar.phase {
+            case .failed(let reason):
+                failedBanner(reason)
+            case .restarting:
+                banner("Restarting the WhatsApp core…", color: .orange)
             default:
-                EmptyView()
+                switch state.connectionState {
+                case "connecting", "offline":
+                    banner("Reconnecting…", color: .orange)
+                case "linking":
+                    banner("Waiting for QR scan…", color: .blue)
+                default:
+                    EmptyView()
+                }
             }
         }
     }
@@ -229,5 +254,24 @@ struct ConnectionBanner: View {
             .foregroundStyle(color)
             .overlay(Capsule().strokeBorder(color.opacity(0.5)))
             .padding(.top, 6)
+    }
+
+    private func failedBanner(_ reason: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+            Text("WhatsApp core stopped: \(reason)")
+                .font(.callout)
+                .lineLimit(2)
+            Button("Restart") { sidecar.restartNow() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 5).padding(.horizontal, 12)
+        .background(Capsule().fill(.regularMaterial))
+        .overlay(Capsule().strokeBorder(Color.red.opacity(0.5)))
+        .padding(.top, 6)
+        .accessibilityElement(children: .combine)
     }
 }

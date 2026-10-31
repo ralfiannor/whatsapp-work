@@ -88,6 +88,7 @@ enum CoreError: LocalizedError {
     case handshakeTimeout
     case lockHeld
     case crashed(exitCode: Int32)
+    case notRunning
 
     var errorDescription: String? {
         switch self {
@@ -95,6 +96,7 @@ enum CoreError: LocalizedError {
         case .handshakeTimeout: return "core did not report READY in time"
         case .lockHeld: return "another core instance holds the lock"
         case .crashed(let code): return "core exited with code \(code)"
+        case .notRunning: return "the WhatsApp core is not running"
         }
     }
 }

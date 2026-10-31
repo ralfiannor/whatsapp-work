@@ -14,9 +14,14 @@ struct MainView: View {
             if let chat = state.selectedChat {
                 TranscriptView(chatJID: chat)
             } else {
-                Text("Select a conversation")
-                    .font(.title3).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 6) {
+                    Text("Select a conversation")
+                        .font(.title3).foregroundStyle(.secondary)
+                    Text("⌘K search · ⌘J next unread · ⌘1–⌘4 filters & inbox")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -44,6 +49,8 @@ struct ChatListView: View {
                 .help(state.focusMode
                       ? "Focus Mode on — only work chats notify"
                       : "Focus Mode off — all chats notify")
+                .accessibilityLabel("Focus Mode")
+                .accessibilityValue(state.focusMode ? "on, only work chats notify" : "off")
             }
             .padding(.horizontal, 10).padding(.top, 6)
             Divider().padding(.top, 6)
@@ -203,6 +210,25 @@ struct ChatRow: View, Equatable {
         rowBody
             .opacity(focusMode && !isWork ? 0.45 : 1)
             .contextMenu { menu }
+            // One VoiceOver stop per chat, counts and states spoken — the
+            // badges and icons alone read as bare numbers and glyph names.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        var parts = [(chatData.kind == "group" ? "Group " : "") + chatTitle]
+        if chatData.unread_count > 0 { parts.append("\(chatData.unread_count) unread") }
+        if chatData.mentioned_unread > 0 { parts.append("\(chatData.mentioned_unread) unread mentions") }
+        if chatData.is_starred == true { parts.append("starred") }
+        if chatData.is_work == true { parts.append("work") }
+        if focusMode && !isWork { parts.append("muted in Focus Mode") }
+        if let preview = chatData.last_preview, !preview.isEmpty {
+            parts.append(state.resolveBareMentionTokens(in: preview))
+        }
+        let time = Self.timeString(chatData.last_message_ts ?? 0)
+        if !time.isEmpty { parts.append(time) }
+        return parts.joined(separator: ", ")
     }
 
     private var menu: some View {
@@ -210,11 +236,11 @@ struct ChatRow: View, Equatable {
             Button("Mark Read") { Task { await state.commitRead(chat, source: .mouse) } }
             Divider()
             Button((chatData.is_starred ?? false) ? "Unstar" : "Star as Work Contact") {
-                Task { try? await state.apiClient?.setChatStar(jid: chat, starred: !(chatData.is_starred ?? false)) }
+                Task { await state.setChatStarred(chat, starred: !(chatData.is_starred ?? false)) }
             }
             if chatData.kind == "group" {
                 Button((chatData.is_work ?? false) ? "Remove from Work Groups" : "Mark as Work Group") {
-                    Task { try? await state.apiClient?.setChatWork(jid: chat, work: !(chatData.is_work ?? false)) }
+                    Task { await state.setChatWork(chat, work: !(chatData.is_work ?? false)) }
                 }
             }
             if chatData.kind != "group" {
@@ -232,7 +258,7 @@ struct ChatRow: View, Equatable {
             HStack(spacing: 4) {
                 Text(chatData.kind == "group" ? "#" : "@")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 Text(chatTitle)
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(chatData.kind == "group" ? .primary : IRCPalette.nickColor(state.nickColorKey(for: chatData.jid)))
@@ -269,7 +295,7 @@ struct ChatRow: View, Equatable {
                 Spacer()
                 Text(Self.timeString(chatData.last_message_ts ?? 0))
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 1)
@@ -300,6 +326,7 @@ struct CircleAvatar: View {
                 .font(.headline)
         }
         .frame(width: 34, height: 34)
+        .accessibilityHidden(true) // decorative: the name is always beside it
     }
 
     private var avatarColor: Color {

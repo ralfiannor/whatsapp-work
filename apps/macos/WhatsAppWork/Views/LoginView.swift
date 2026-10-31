@@ -21,6 +21,7 @@ struct LoginView: View {
                     .padding(16)
                     .background(Color.white)
                     .cornerRadius(8)
+                    .accessibilityLabel("QR code for linking this Mac")
                 Text("WhatsApp → Settings → Linked Devices → Scan")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
@@ -36,7 +37,7 @@ struct LoginView: View {
                     // client, temporary ban): logging out wipes it. Showing
                     // it only while "connected" hid it exactly when a dead
                     // device class needs it most.
-                    Button("Log Out") { Task { await state.logout() } }
+                    Button("Log Out…") { state.confirmingLogout = true }
                         .buttonStyle(.bordered)
                         .help("Unlink this device and wipe local data")
                 }

@@ -140,6 +140,7 @@ struct TranscriptView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Transcript text size and density")
+        .accessibilityLabel("Text size and density")
     }
 
     private var previewBinding: Binding<Bool> {
@@ -158,12 +159,12 @@ struct TranscriptView: View {
             if isGroup {
                 Text("\(state.chatMembers[chatJID]?.count ?? 0)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 // Raw group identifier: small and tertiary, but selectable so
                 // it can be copied (select + ⌘C) for sharing/invites.
                 Text(chatJID)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -174,14 +175,14 @@ struct TranscriptView: View {
                 // once the lid map knows it; selectable for copy.
                 Text(chatJID)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 if let lid = state.lid(forChat: chatJID), lid != chatJID {
                     Text("· \(lid)")
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -198,6 +199,8 @@ struct TranscriptView: View {
                 }
                 .buttonStyle(.plain)
                 .help(showMemberPanel ? "Hide members" : "Show members")
+                .accessibilityLabel("Members panel")
+                .accessibilityValue(showMemberPanel ? "shown" : "hidden")
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -241,6 +244,7 @@ private struct MessageList: View, Equatable {
     @State private var reactFor: Int64?
     @State private var scrollBridge = TranscriptScrollBridge()
     @FocusState private var listFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static func == (lhs: MessageList, rhs: MessageList) -> Bool {
         lhs.chatJID == rhs.chatJID && lhs.nickColumn == rhs.nickColumn
@@ -280,7 +284,7 @@ private struct MessageList: View, Equatable {
                             if case let .some(.row(rowID, count)) = unreadMarker,
                                rowID == m.id {
                                 UnreadDivider(count: count) {
-                                    withAnimation(.easeOut(duration: 0.25)) {
+                                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
                                         proxy.scrollTo("bottom", anchor: .bottom)
                                     }
                                 }
@@ -321,6 +325,10 @@ private struct MessageList: View, Equatable {
             .onKeyPress("e") { if selectedRowID != nil { reactFor = selectedRowID; snoozeFor = nil }
                 return selectedRowID != nil ? .handled : .ignored }
             .onKeyPress("r") { replyToSelection() }
+            // Open Snooze / React panels answer to the keys they display.
+            .onKeyPress(keys: ["h", "t", "w", "1", "2", "3", "4"]) { press in
+                panelKey(press.characters)
+            }
             .onKeyPress(.escape) {
                 guard selectedRowID != nil || snoozeFor != nil || reactFor != nil else { return .ignored }
                 selectedRowID = nil
@@ -331,16 +339,17 @@ private struct MessageList: View, Equatable {
             .overlay(alignment: .bottom) {
                 if !atBottom && !messages.isEmpty {
                     Button {
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("bottom", anchor: .bottom) }
                     } label: {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.title2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .background(Circle().fill(.regularMaterial))
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 10)
                     .help("Jump to latest")
+                    .accessibilityLabel("Jump to latest message")
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -416,6 +425,26 @@ private struct MessageList: View, Equatable {
         return .handled
     }
 
+    private func panelKey(_ characters: String) -> KeyPress.Result {
+        if let id = snoozeFor,
+           let option = SnoozePanel.options.first(where: { String($0.key) == characters }) {
+            Task {
+                if await state.snoozeMessage(rowID: id, until: option.until(), label: option.label) {
+                    snoozeFor = nil
+                }
+            }
+            return .handled
+        }
+        if let id = reactFor, let number = Int(characters),
+           ReactionPanel.emojis.indices.contains(number - 1) {
+            let emoji = ReactionPanel.emojis[number - 1]
+            reactFor = nil
+            Task { await state.react(rowID: id, emoji: emoji) }
+            return .handled
+        }
+        return .ignored
+    }
+
     private func replyToSelection() -> KeyPress.Result {
         guard let id = selectedRowID,
               let m = messages.first(where: { $0.id == id }) else { return .ignored }
@@ -457,7 +486,7 @@ private struct MessageList: View, Equatable {
         // scrollTo from inside a gesture handler needs the next runloop
         // pass — called synchronously the List ignores it.
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
                 proxy.scrollTo(m.id, anchor: .center)
             }
         }
@@ -553,7 +582,7 @@ struct DateDivider: View {
     var body: some View {
         Text(label)
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .accessibilityAddTraits(.isHeader)
@@ -621,61 +650,90 @@ struct SnoozePanel: View {
     let onDismiss: () -> Void
     @EnvironmentObject var state: AppState
 
+    /// Shared with MessageList's key handling: the letter shown is the
+    /// letter that works. Deadlines are computed when chosen, not when the
+    /// panel opened.
+    struct Option {
+        let title: String
+        let key: Character
+        /// Toast wording, matching the transcript context menu.
+        let label: String
+        let until: @MainActor () -> Int64
+    }
+
+    static let options: [Option] = [
+        Option(title: "In 1 hour", key: "h", label: "1 hour", until: { AppState.snoozeOneHour }),
+        Option(title: "Tomorrow 9am", key: "t", label: "tomorrow 9am", until: { AppState.nextMorning() }),
+        Option(title: "Next week", key: "w", label: "next week", until: { AppState.snoozeNextWeek() }),
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("SNOOZE")
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 8).padding(.top, 6)
-            option("Later today", "H", until: AppState.snoozeOneHour)
-            option("Tomorrow 9am", "T", until: AppState.nextMorning())
-            option("Next week", "W", until: AppState.snoozeNextWeek())
+                .accessibilityAddTraits(.isHeader)
+            ForEach(Self.options, id: \.key) { option($0) }
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(.regularMaterial)
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary)))
         .frame(width: 150)
     }
 
-    private func option(_ title: String, _ key: String, until: Int64) -> some View {
+    private func option(_ option: Option) -> some View {
         Button {
             Task {
-                if await state.snoozeMessage(rowID: rowID, until: until, label: title.lowercased()) {
+                if await state.snoozeMessage(rowID: rowID, until: option.until(), label: option.label) {
                     onDismiss()
                 }
             }
         } label: {
             HStack {
-                Text(title).font(.system(size: 11.5, design: .monospaced))
+                Text(option.title).font(.system(size: 11.5, design: .monospaced))
                 Spacer()
-                Text(key).font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text(String(option.key).uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Snooze \(option.label)")
     }
 }
 
-/// Reaction picker for the selected row (E key).
+/// Reaction picker for the selected row (E key); 1–4 pick by keyboard.
 struct ReactionPanel: View {
     let rowID: Int64
     let onDismiss: () -> Void
     @EnvironmentObject var state: AppState
 
+    /// Quick reactions — shared with the row context menu and MessageList's
+    /// number-key handling.
+    static let emojis = ["👍", "❤️", "😂", "✅"]
+
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(["👍", "❤️", "😂", "✅"], id: \.self) { emoji in
+            ForEach(Array(Self.emojis.enumerated()), id: \.element) { index, emoji in
                 Button {
                     Task {
-                        try? await state.apiClient?.react(rowID: rowID, emoji: emoji)
+                        await state.react(rowID: rowID, emoji: emoji)
                         onDismiss()
                     }
                 } label: {
-                    Text(emoji)
-                        .font(.system(size: 16))
-                        .padding(.horizontal, 6).padding(.vertical, 4)
-                        .contentShape(Rectangle())
+                    VStack(spacing: 0) {
+                        Text(emoji)
+                            .font(.system(size: 16))
+                        Text("\(index + 1)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -796,9 +854,11 @@ struct ComposerBar: View {
                 Button {
                     state.clearReply(for: chatJID)
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Cancel reply")
+                .accessibilityLabel("Cancel reply")
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.35)))
@@ -877,6 +937,8 @@ struct ComposerBar: View {
                 Image(systemName: "paperplane.fill")
             }
             .disabled(!canSend)
+            .help("Send (Return)")
+            .accessibilityLabel("Send")
             .keyboardShortcut(.return, modifiers: .command)
             .padding(.bottom, 8)
         }
@@ -1320,8 +1382,7 @@ struct MessageBubble: View {
                                 || (ownLID != nil && $0.reactor_jid == ownLID)
                         }
                         Task {
-                            try? await state.apiClient?.react(rowID: message.id,
-                                                              emoji: mine ? "" : g.emoji)
+                            await state.react(rowID: message.id, emoji: mine ? "" : g.emoji)
                         }
                     } label: {
                         Text("\(g.emoji) \(g.users.count)")
@@ -1397,8 +1458,8 @@ struct MessageBubble: View {
                 }
             }
             Divider()
-            ForEach(["👍", "❤️", "😂", "✅"], id: \.self) { emoji in
-                Button(emoji) { Task { try? await state.apiClient?.react(rowID: message.id, emoji: emoji) } }
+            ForEach(ReactionPanel.emojis, id: \.self) { emoji in
+                Button(emoji) { Task { await state.react(rowID: message.id, emoji: emoji) } }
             }
             Divider()
             Button(message.done == true ? "Mark Not Done" : "✓ Done") {
@@ -1670,10 +1731,11 @@ struct ProfileView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("Back to members")
+                .accessibilityLabel("Close profile")
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
 
@@ -1818,7 +1880,7 @@ struct ProfileView: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title.uppercased())
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(size: 11, design: .monospaced))
                 .textSelection(.enabled)
@@ -1850,6 +1912,7 @@ struct ImagePreviewSheet: View {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .help("Save image to disk")
+                    .accessibilityLabel("Save image")
                     Button("Close") { state.previewImage = nil }
                         .keyboardShortcut(.cancelAction)
                 }

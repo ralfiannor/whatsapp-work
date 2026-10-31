@@ -6,6 +6,8 @@ struct SearchOverlay: View {
     @State private var query = ""
     @State private var results: SearchResponse?
     @State private var searching = false
+    @State private var failed = false
+    @Environment(\.dismiss) private var dismiss
     /// Keyboard highlight into the flat results list (↓/↑/Enter).
     @State private var selection: Int?
     @FocusState private var focused: Bool
@@ -25,16 +27,13 @@ struct SearchOverlay: View {
     }
 
     var body: some View {
+        // The sheet is the panel: no inner card, padding or shadow of its own.
         VStack(spacing: 0) {
             field
             Divider()
             resultList
         }
-        .frame(width: 520)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(radius: 18)
-        .padding(60)
+        .frame(width: 600)
         .onKeyPress(.downArrow) { moveSelection(1) }
         .onKeyPress(.upArrow) { moveSelection(-1) }
         .onAppear { focused = true }
@@ -88,34 +87,71 @@ struct SearchOverlay: View {
                     }
                 }
             if searching { ProgressView().controlSize(.small) }
+            // Sheets close with Esc, but a mouse user had no way out.
+            Button { dismiss() } label: {
+                Text("esc")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.secondary.opacity(0.6)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Close search")
+            .accessibilityLabel("Close search")
         }
         .padding(12)
     }
 
     @ViewBuilder
     private var resultList: some View {
-        ScrollView {
-            if let res = results {
-                if isEmpty(res) {
-                    Text("No results").foregroundStyle(.secondary).padding(.vertical, 24)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(flatRows.enumerated()), id: \.offset) { idx, row in
-                            if idx == 0 || sectionName(flatRows[idx - 1]) != sectionName(row) {
-                                header(sectionName(row))
+        ScrollViewReader { proxy in
+            ScrollView {
+                if failed {
+                    statusLine("Search failed — the local core didn't answer. Try again in a moment.")
+                } else if let res = results {
+                    if isEmpty(res) {
+                        statusLine("No results for “\(query.trimmingCharacters(in: .whitespaces))”")
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(flatRows.enumerated()), id: \.offset) { idx, row in
+                                if idx == 0 || sectionName(flatRows[idx - 1]) != sectionName(row) {
+                                    header(sectionName(row))
+                                }
+                                rowContent(row)
+                                    .background(selection == idx
+                                                ? Color.accentColor.opacity(0.18)
+                                                : Color.clear)
+                                    .contentShape(Rectangle())
+                                    .id(idx)
                             }
-                            rowContent(row)
-                                .background(selection == idx
-                                            ? Color.accentColor.opacity(0.18)
-                                            : Color.clear)
-                                .contentShape(Rectangle())
                         }
+                        .padding(8)
                     }
-                    .padding(8)
+                } else if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    statusLine("Type to search messages, chats and contacts · ↑↓ to move · ⏎ to open")
                 }
             }
+            // ↑/↓ past the visible rows must bring the highlight along.
+            .onChange(of: selection) { _, idx in
+                guard let idx else { return }
+                proxy.scrollTo(idx)
+            }
         }
-        .frame(maxHeight: 420)
+        // A sheet sizes itself once, from the content it opens with, and a
+        // ScrollView has no ideal height — `maxHeight` alone left the results
+        // a one-hint-line slit. A fixed height also keeps the panel from
+        // jumping as the result count changes while typing. Fits the
+        // window's 560 pt minimum with the field above it.
+        .frame(height: 380)
+    }
+
+    private func statusLine(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24).padding(.horizontal, 16)
     }
 
     private func sectionName(_ row: SearchRow) -> String {
@@ -153,7 +189,7 @@ struct SearchOverlay: View {
     private func header(_ title: String) -> some View {
         Text(title.uppercased())
             .font(.caption2.bold())
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.top, 6)
     }
@@ -201,15 +237,24 @@ struct SearchOverlay: View {
 
     private func search() async {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { results = nil; return }
+        guard !q.isEmpty else {
+            results = nil
+            failed = false
+            return
+        }
         searching = true
-        let res = await state.runSearch(q)
+        defer { searching = false }
+        let res: SearchResponse?
+        do {
+            res = try await state.runSearch(q)
+        } catch {
+            res = nil
+        }
         // A slower stale response (Enter racing the debounce) must not
         // overwrite results for a newer query.
-        if query.trimmingCharacters(in: .whitespaces) == q {
-            results = res
-        }
-        searching = false
+        guard query.trimmingCharacters(in: .whitespaces) == q else { return }
+        results = res
+        failed = res == nil
     }
 
     private func chatName(_ jid: String) -> String {

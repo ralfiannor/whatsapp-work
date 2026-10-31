@@ -4135,6 +4135,34 @@ final class RuntimePoliciesTests: XCTestCase {
         XCTAssertTrue(endpoints.mediaRequests.isEmpty)
     }
 
+    /// Reactions and chat toggles used `try?` and vanished on failure; with
+    /// the core down they must say so.
+    @MainActor
+    func testQuickActionsSurfaceFailureWhenCoreIsDown() async {
+        let state = AppState(dockBadgeSink: { _ in })
+
+        await state.react(rowID: 1, emoji: "👍")
+        XCTAssertEqual(state.toast, "Reaction failed: the WhatsApp core is not running")
+
+        await state.setChatStarred("a@s.whatsapp.net", starred: true)
+        XCTAssertEqual(state.toast, "Couldn't star the chat: the WhatsApp core is not running")
+
+        await state.setChatWork("120@g.us", work: false)
+        XCTAssertEqual(state.toast, "Couldn't update work groups: the WhatsApp core is not running")
+    }
+
+    /// The search overlay tells "core can't answer" apart from "no query".
+    @MainActor
+    func testSearchThrowsWhenCoreIsDown() async {
+        let state = AppState(dockBadgeSink: { _ in })
+        do {
+            _ = try await state.runSearch("invoice")
+            XCTFail("search without a core must throw")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "the WhatsApp core is not running")
+        }
+    }
+
 }
 
 private enum FakeSocketError: Error {
