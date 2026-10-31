@@ -28,6 +28,14 @@
 	<false/>
 	<key>NSSupportsSuddenTermination</key>
 	<false/>
+	<!-- In-app updater (Core/UpdateManager.swift, docs/releasing.md): the
+	     latest GitHub release, installed only if its DMG verifies against
+	     this Ed25519 public key. A fork publishing its own releases must
+	     point both at its own repository and key. -->
+	<key>WWUpdateFeedURL</key>
+	<string>https://api.github.com/repos/ralfiannor/whatsapp-work/releases/latest</string>
+	<key>WWUpdatePublicKey</key>
+	<string>tGmu/EJYPwjPZPim9v+q05naINC3xCU3ztLol3WT3vQ=</string>
 	<!-- Local network is not needed: IPC is loopback-only. -->
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Notifies you about work messages.</string>
