@@ -20,6 +20,7 @@ final class AppState: ObservableObject {
     @Published var selectedChat: String? {
         didSet {
             guard selectedChat != oldValue else { return }
+            if selectedChat != nil { notesOpen = false }
             if let oldValue {
                 performanceSignposts.cancelPendingRows(chatKey: oldValue)
                 cancelChatSwitchMeasurement(for: oldValue)
@@ -87,6 +88,10 @@ final class AppState: ObservableObject {
     /// "no matches" (empty state), not "still loading" (spinner).
     @Published private(set) var chatsLoaded = false
     @Published var sidebarTab: SidebarTab = .chats
+    /// Local notes fill the detail column instead of a transcript. Never
+    /// true while a chat is selected: opening notes deselects the chat and
+    /// selecting any chat (list, search, ⌘J, notification) closes notes.
+    @Published private(set) var notesOpen = false
     /// Focus Mode: only work-marked chats (work groups + starred work
     /// contacts) may notify or feed the dock badge; everything else silent.
     @AppStorage("focusMode") var focusMode = false
@@ -140,6 +145,7 @@ final class AppState: ObservableObject {
 
     let sidecar: SidecarManager
     let updater: UpdateManager
+    let notes: NotesStore
     private var api: APIClient?
     private var runtimeClient: AppRuntimeClient?
     private let connectionRefresh: ConnectionRefreshCoordinator<AppRuntimeClient>
@@ -218,6 +224,7 @@ final class AppState: ObservableObject {
         },
         sidecar: SidecarManager = SidecarManager(),
         updater: UpdateManager? = nil,
+        notes: NotesStore? = nil,
         attachmentLoad: @escaping @Sendable (URL, Int64) async throws -> Data = { url, maxBytes in
             try await AttachmentLoader.load(url: url, maxBytes: maxBytes)
         },
@@ -233,6 +240,7 @@ final class AppState: ObservableObject {
         self.performanceSignposts.beginLaunch()
         self.sidecar = sidecar
         self.updater = updater ?? UpdateManager()
+        self.notes = notes ?? NotesStore()
         self.runtimeClient = runtimeClient
         api = runtimeClient?.api
         connectionRefresh = ConnectionRefreshCoordinator(sleep: contactSleep)
@@ -1140,6 +1148,7 @@ final class AppState: ObservableObject {
         protectedOptimisticChatsByTemp = [:]
         provisionalEchoesByTemp = [:]
         selectedChat = nil
+        notesOpen = false
         lastOpenedChat = nil
         mediaImages = [:]
         mediaImageBytes = [:]
@@ -1717,6 +1726,15 @@ final class AppState: ObservableObject {
               source: ChatOpenSource) async {
         await previewChat(chat, anchorMessageID: anchorMessageID)
         await commitRead(chat, source: source)
+    }
+
+    func openNotes() {
+        selectedChat = nil
+        // The composer left the screen; a stale flag would turn ⌘V of a
+        // copied file into a staged attachment instead of note text.
+        composerFieldFocused = false
+        sidebarTab = .chats
+        notesOpen = true
     }
 
     func showInbox() {

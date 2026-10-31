@@ -161,6 +161,8 @@ Summary here; full DDL and rationale in docs/schema.md.
 - Logs: message **content is never logged**; only IDs/JIDs/error codes. whatsmeow's internal logger
   runs at `warn` for the same reason.
 - FS: data dir `0700`, DB files `0600`. Session file is a credential (R12: encryption later).
+- Local notes (`Notes/notes.json`, `0700`/`0600`) are read and written by the Swift app only. No
+  IPC endpoint carries them, so note text can never reach the core or WhatsApp.
 - No telemetry. If ever added: opt-in, no conversation data.
 
 ## 6. Swift ↔ Go sidecar lifecycle contract

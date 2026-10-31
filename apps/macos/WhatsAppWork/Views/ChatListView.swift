@@ -14,11 +14,13 @@ struct MainView: View {
         } detail: {
             if let chat = state.selectedChat {
                 TranscriptView(chatJID: chat)
+            } else if state.notesOpen {
+                NotesView(notes: state.notes)
             } else {
                 VStack(spacing: 6) {
                     Text("Select a conversation")
                         .font(.title3).foregroundStyle(.secondary)
-                    Text("⌘K search · ⌘J next unread · ⌘1–⌘4 filters & inbox")
+                    Text("⌘K search · ⌘J next unread · ⌘1–⌘4 filters & inbox · ⌘5 notes")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
@@ -77,8 +79,27 @@ struct ChatListView: View {
         })
     }
 
+    /// Selection tag of the pinned Notes row. JIDs always contain "@", so
+    /// this can never collide with a chat.
+    static let notesTag = "local:notes"
+
+    /// The List selects chats and the Notes row alike; only real JIDs reach
+    /// selectedChat (its observer loads pages and commits reads).
+    private var selection: Binding<String?> {
+        Binding(get: { state.notesOpen ? Self.notesTag : state.selectedChat },
+                set: { tag in
+                    if tag == Self.notesTag {
+                        state.openNotes()
+                    } else {
+                        state.selectedChat = tag
+                    }
+                })
+    }
+
     private var chatList: some View {
-        List(selection: $state.selectedChat) {
+        List(selection: selection) {
+            NotesChatListRow(notes: state.notes)
+                .tag(Self.notesTag)
             ForEach(state.chats) { chat in
                 ChatRow(chat: chat,
                         focus: state.focusMode,
@@ -170,16 +191,21 @@ struct ChatListView: View {
     }
 
     /// J/K: next/previous conversation (fires only while the list has key
-    /// focus — typing in the composer is never captured).
+    /// focus — typing in the composer is never captured). The Notes row sits
+    /// at index -1, above the first chat.
     private func moveSelection(_ delta: Int) -> KeyPress.Result {
         guard !state.chats.isEmpty else { return .ignored }
-        let current = state.selectedChat.flatMap { jid in
+        let current = state.notesOpen ? -1 : state.selectedChat.flatMap { jid in
             state.chats.firstIndex(where: { $0.jid == jid })
         }
         let next: Int
         switch current {
-        case let idx?: next = min(max(idx + delta, 0), state.chats.count - 1)
+        case let idx?: next = min(max(idx + delta, -1), state.chats.count - 1)
         case nil: next = delta > 0 ? 0 : state.chats.count - 1
+        }
+        guard next >= 0 else {
+            state.openNotes()
+            return .handled
         }
         state.markSelectionBrowsing()
         state.selectedChat = state.chats[next].jid

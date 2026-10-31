@@ -53,6 +53,11 @@ struct WhatsAppWorkApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                 Button("Search") { state.searchOpen = true }
                     .keyboardShortcut("k", modifiers: .command)
+                Button("New Note") {
+                    state.openNotes()
+                    state.notes.create()
+                }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
             }
             CommandMenu("Go") {
                 Button("All Chats") { Task { await state.applyFilter("all") } }
@@ -63,6 +68,8 @@ struct WhatsAppWorkApp: App {
                     .keyboardShortcut("3", modifiers: .command)
                 Button("Inbox") { state.showInbox() }
                     .keyboardShortcut("4", modifiers: .command)
+                Button("Notes") { state.openNotes() }
+                    .keyboardShortcut("5", modifiers: .command)
                 Button("Next Unread") { Task { await state.jumpNextUnread() } }
                     .keyboardShortcut("j", modifiers: .command)
             }
@@ -152,6 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Note edits are saved on a short debounce; don't lose the last one.
+        AppDelegate.state?.notes.flush()
         // Synchronous: an async stop loses the race with process exit and
         // orphans a core holding the DB lock.
         AppDelegate.state?.sidecar.stopBlocking()
