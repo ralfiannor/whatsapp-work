@@ -9,6 +9,7 @@ struct MainView: View {
     var body: some View {
         NavigationSplitView {
             ChatListView()
+                .safeAreaInset(edge: .bottom, spacing: 0) { UpdateBar(updater: state.updater) }
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
         } detail: {
             if let chat = state.selectedChat {

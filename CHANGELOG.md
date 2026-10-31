@@ -8,6 +8,16 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Added
+
+- In-app updates from GitHub Releases. The app checks at launch, every
+  12 h, or via WhatsApp Work ▸ Check for Updates…. It installs a newer
+  release only if its DMG verifies against the maintainer's Ed25519
+  release key. The install happens at quit or on "Restart", as an atomic
+  bundle swap. `scripts/release.sh` builds, packages and signs a release;
+  see docs/releasing.md. Copies running 0.1.0 have no updater and need
+  this release installed by hand once.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.
