@@ -8,6 +8,16 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Added
+
+- Local notes: a Notes row pinned at the top of the chat list opens a
+  list of Markdown notes (headings, lists, checklists, quotes, code,
+  tables, inline styles) with edit and preview modes (`⌘5`, `⌥⌘N`,
+  `⇧⌘P`). Notes are stored only on this Mac in
+  `Application Support/WhatsAppWork/Notes/notes.json` (folder `0700`,
+  file `0600`), written by the app alone. The core never receives them
+  and logout does not delete them.
+
 ### Fixed
 
 - The core reports the app's version (READY line, `/healthz`,

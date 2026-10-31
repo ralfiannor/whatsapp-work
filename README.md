@@ -34,6 +34,9 @@ offline-first. No Electron, no WebView, no Chromium.
   grouped as a local work queue: items leave only when you mark them done or
   snooze them (reading a chat keeps them); Focus Mode silences everything
   except work-marked chats
+- **Local notes (⌘5)** — Markdown notes pinned at the top of the chat list:
+  as many as you like, edit or preview, clickable checklists. Stored only on
+  this Mac by the app itself; the core never sees them, nothing is sent
 - **Media on demand** — nothing downloads eagerly; images and stickers
   render as downsampled previews from a bounded LRU cache (500 MB disk)
 - **Light** — idle ≈ 0% CPU, sidecar ~38 MB RSS on a 500k-message account
@@ -78,6 +81,8 @@ go run ./cmd/whatsapp-core --data-dir ./data
 | `⌘J` | Jump to next unread chat |
 | `⌘1`/`⌘2`/`⌘3` | Filter: all / unread / mentions |
 | `⌘4` | Work inbox |
+| `⌘5` / `⌥⌘N` | Notes / new note |
+| `⇧⌘P` | Notes: toggle Markdown edit / preview |
 | `⌘⇧F` | Focus Mode toggle |
 | `↩` / `⇥` | Accept first mention suggestion / send |
 
