@@ -216,6 +216,7 @@ private struct MessageList: View, Equatable {
     @State private var selectedRowID: Int64?
     @State private var snoozeFor: Int64?
     @State private var reactFor: Int64?
+    @State private var scrollBridge = TranscriptScrollBridge()
     @FocusState private var listFocused: Bool
 
     static func == (lhs: MessageList, rhs: MessageList) -> Bool {
@@ -282,8 +283,8 @@ private struct MessageList: View, Equatable {
             // Older-message paging trigger: the List's clip-view offset, not
             // a sentinel row's onAppear (which never fires on macOS).
             .background(
-                TopPagingMonitor {
-                    Task { await automaticTopPaging(proxy) }
+                TopPagingMonitor(chatJID: chatJID, bridge: scrollBridge) {
+                    await automaticTopPaging(proxy)
                 }
             )
             .focused($listFocused)
@@ -336,6 +337,7 @@ private struct MessageList: View, Equatable {
                 }
             }
             .onAppear {
+                showLatestUnlessAnchored(proxy)
                 resolvePendingAnchor(proxy)
                 finishSelectedPageAtViewUpdateProxy()
             }
@@ -353,7 +355,21 @@ private struct MessageList: View, Equatable {
                 selectedRowID = nil
                 snoozeFor = nil
                 reactFor = nil
+                // The list outlives chat switches: reading history in one
+                // chat must not leave the next one parked mid-transcript.
+                showLatestUnlessAnchored(proxy)
             }
+        }
+    }
+
+    /// Opens on the latest messages. `defaultScrollAnchor(.bottom)` does not
+    /// position a macOS 14 List, and the bottom-follow in onChange(of:
+    /// last id) only runs while `atBottom` — stale after a chat switch.
+    private func showLatestUnlessAnchored(_ proxy: ScrollViewProxy) {
+        guard state.pendingAnchor?.chatJID != chatJID else { return }
+        atBottom = true
+        DispatchQueue.main.async {
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
 
@@ -436,10 +452,12 @@ private struct MessageList: View, Equatable {
         // before it landed) — leave them untouched.
         guard let anchor = state.pendingAnchor, anchor.chatJID == chatJID else { return }
         guard let m = messages.first(where: { $0.message_id == anchor.messageID }) else {
-            let before = messages.count
+            // A page already in flight re-resolves via onChange(of: count);
+            // its busy "false" is not the end of history.
+            guard !loadingOlder else { return }
             Task {
-                await loadOlder()
-                if messages.count == before, state.pendingAnchor == anchor {
+                let loaded = await loadOlder()
+                if !loaded, state.pendingAnchor == anchor {
                     // loadOlder made no progress: end of history, target absent.
                     state.pendingAnchor = nil
                     state.toast = "Message is older than the loaded history — try ⌘K search"
@@ -454,37 +472,40 @@ private struct MessageList: View, Equatable {
         }
     }
 
-    private func loadOlder() async {
+    /// Fetches one older page; true when rows were prepended. With
+    /// `holdingPosition` the probe pins the reader's row while the page lays
+    /// out above it — the hold must start in the same main-actor turn as the
+    /// state merge, before SwiftUI applies it.
+    private func loadOlder(holdingPosition: Bool = false) async -> Bool {
         // A short first page means the whole history is already loaded.
-        guard !loadingOlder, messages.count >= 50 else { return }
+        guard !loadingOlder, messages.count >= 50 else { return false }
         loadingOlder = true
-        await state.loadOlderMessages(for: chatJID)
+        let loaded = await state.loadOlderMessages(for: chatJID)
+        if loaded && holdingPosition { scrollBridge.holdPositionForPrepend() }
         loadingOlder = false
+        return loaded
     }
 
     /// Scroll-driven paging entry: one shared decision for every automatic
     /// trigger. The visible Load Earlier divider stays for explicit paging
     /// and as the unread-count affordance.
-    private func automaticTopPaging(_ proxy: ScrollViewProxy) async {
+    private func automaticTopPaging(_ proxy: ScrollViewProxy) async -> Bool {
         guard AutomaticTopPagingDecision.shouldLoad(
             jumping: jumping,
             loadingOlder: loadingOlder,
             messageCount: messages.count
-        ) else { return }
-        await loadOlderAnchored(proxy)
+        ) else { return false }
+        return await loadOlderAnchored(proxy)
     }
 
-    /// Paging for manual scroll-up. After a successful prepend the
-    /// TopPagingMonitor probe shifts the clip view to the equivalent offset
-    /// (the row the reader was on stays visually fixed), leaving offset room
-    /// for the next reach-top to fire — `proxy.scrollTo` here was unreliable
-    /// (silently dropped) and left the offset pinned at the top.
-    private func loadOlderAnchored(_ proxy: ScrollViewProxy) async {
-        let before = messages.count
-        await loadOlder()
-        let after = state.messagesByChat[chatJID]?.count ?? before
-        guard after > before else { return }
-        resolvePendingAnchor(proxy)
+    /// Paging for manual scroll-up and Load Earlier: the reader's row stays
+    /// visually fixed while older rows land above it, leaving offset room
+    /// for the next reach-top to fire.
+    @discardableResult
+    private func loadOlderAnchored(_ proxy: ScrollViewProxy) async -> Bool {
+        let loaded = await loadOlder(holdingPosition: true)
+        if loaded { resolvePendingAnchor(proxy) }
+        return loaded
     }
 }
 

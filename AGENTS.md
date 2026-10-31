@@ -110,6 +110,14 @@ in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
   scrolling on Intel; we rolled it back to SwiftUI `Text`. Accept the
   missing link-cursor; do not re-introduce without a scroll-perf
   measurement on the 2018-class machine.
+- **Transcript `List` scroll facts (macOS 14, verified in an isolated
+  harness):** a `.background` representable is a SIBLING of the List's
+  `NSScrollView` (`enclosingScrollView` is nil) — `TopPagingMonitor` finds
+  it by frame overlap. Prepending rows does not keep the reader's row (the
+  offset stays, content jumps; row heights settle over several passes), so
+  every older-page prepend goes through `TranscriptScrollBridge`.
+  `defaultScrollAnchor(.bottom)` does not position a List; open/switch
+  scrolls to the bottom sentinel explicitly.
 - Image decode goes through `downsampledImage` in a detached task
   (`nonisolated`); decoded-image RAM is byte-budgeted (`mediaImages` +
   `mediaImageBytes` stay in sync on every path).

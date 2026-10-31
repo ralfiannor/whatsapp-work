@@ -1733,9 +1733,13 @@ final class AppState: ObservableObject {
         await previewChat(next.jid)
     }
 
-    func loadOlderMessages(for chat: String) async {
+    /// Prepends the page before the oldest loaded row. Returns true when
+    /// rows were actually added — false at the start of history, on failure,
+    /// or when the page only repeated rows already loaded.
+    @discardableResult
+    func loadOlderMessages(for chat: String) async -> Bool {
         guard let api, let list = messagesByChat[chat],
-              let oldest = list.first else { return }
+              let oldest = list.first else { return false }
         // Capture before the await: a logout/sidecar restart mid-fetch must
         // not merge an old-account page into the fresh session.
         let capturedClient = runtimeClient
@@ -1751,16 +1755,16 @@ final class AppState: ObservableObject {
             )
         } catch {
             pageOutcome = Task.isCancelled ? .cancelled : .failed
-            return
+            return false
         }
         guard !Task.isCancelled, let capturedClient,
               isCurrentRefreshClient(capturedClient) else {
             pageOutcome = .cancelled
-            return
+            return false
         }
         guard !res.messages.isEmpty else {
             pageOutcome = .completed
-            return
+            return false
         }
         // Re-read after the await: WS rows appended mid-fetch must
         // survive the prepend.
@@ -1775,6 +1779,7 @@ final class AppState: ObservableObject {
             messages: retained
         )
         pageOutcome = .completed
+        return retained.count > current.count
     }
 
     // MARK: sending (optimistic UI)
