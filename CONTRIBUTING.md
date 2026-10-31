@@ -41,7 +41,9 @@ WW_BENCH_N=150000 go test ./internal/storage -run XXX -bench . -benchmem
 ```
 
 A change is not done until: Go tests + race green, the app builds, and —
-for hot paths — a measurement.
+for hot paths — a measurement. CI (`.github/workflows/ci.yml`) runs the
+same checks plus the app's unit tests on every pull request and on
+`main`; the measurement is still yours to provide.
 
 ## Code pointers
 

@@ -1,0 +1,57 @@
+# The "done" checks from AGENTS.md: Go vet + tests + race, the universal
+# sidecar, and the macOS app build with its unit tests. Build only — it
+# never signs or publishes a release (docs/releasing.md keeps that manual).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Go core
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Build and vet
+        run: go build ./... && go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Race
+        run: go test -race ./internal/app ./internal/whatsapp ./internal/storage ./internal/ipc
+
+  app:
+    name: macOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Build sidecar
+        run: ./scripts/build-core.sh
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd apps/macos && xcodegen generate
+      # Builds the app (the post-build phase bundles and signs the sidecar)
+      # and runs its unit tests; the test host never boots the core.
+      - name: Build and test app
+        working-directory: apps/macos
+        run: |
+          xcodebuild -version
+          xcodebuild test -scheme WhatsAppWork -configuration Debug \
+            -derivedDataPath build/DerivedData
