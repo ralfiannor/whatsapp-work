@@ -31,6 +31,11 @@ struct WhatsAppWorkApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task { await state.updater.checkNow(userInitiated: true) }
+                }
+            }
             CommandGroup(replacing: .pasteboard) {
                 Button("Cut") { responderActions.perform(.cut) }
                     .keyboardShortcut("x", modifiers: .command)
@@ -150,6 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Synchronous: an async stop loses the race with process exit and
         // orphans a core holding the DB lock.
         AppDelegate.state?.sidecar.stopBlocking()
+        // A verified, staged update replaces this bundle only now, with the
+        // core stopped (and reopens it after "Restart to Update").
+        AppDelegate.state?.updater.installPendingUpdate()
         return .terminateNow
     }
 
@@ -282,5 +290,50 @@ struct ConnectionBanner: View {
         .overlay(Capsule().strokeBorder(Color.red.opacity(0.5)))
         .padding(.top, 6)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Sidebar footer for a verified, staged update — or one this copy can't
+/// install itself. Every other updater state stays out of sight: checks
+/// and downloads run in the background.
+struct UpdateBar: View {
+    @ObservedObject var updater: UpdateManager
+
+    var body: some View {
+        switch updater.status {
+        case .ready(let version):
+            bar("WhatsApp Work \(version) is ready", button: "Restart",
+                help: "Quit, install the update and reopen") {
+                updater.restartToUpdate()
+            }
+        case .manualOnly(let version, let page):
+            bar("WhatsApp Work \(version) is available", button: "Download",
+                help: "This copy can't replace itself — open the release page") {
+                NSWorkspace.shared.open(page)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func bar(_ title: String, button: String, help: String,
+                     action: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.green)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.callout)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button(button, action: action)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help(help)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 }

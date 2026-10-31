@@ -155,6 +155,12 @@ in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
   exit codes 0/2/3/4, `SidecarManager.stopBlocking()` on app quit.
 - The media manager re-checks actual downloaded bytes against the cap —
   the proto's FileLength is attacker-supplied. Keep it that way.
+- **Updates trust only the Ed25519 release key** (`UpdateManager`,
+  docs/releasing.md). Builds are ad-hoc signed, so `codesign` proves
+  integrity, not authorship. Never add an install path that skips the
+  signature, bundle-ID or exact-version checks, and never commit the
+  private key. Unit-test hosts must not boot the core
+  (`WhatsAppWorkApp.isUnitTestHost`).
 - **Identity duality is pervasive.** Every jid-keyed write (contacts,
   reactions, mention lists, read receipts) can arrive under the PN or the
   LID form of the same human, while rendering layers canonicalize to PN.

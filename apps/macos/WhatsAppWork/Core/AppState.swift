@@ -139,6 +139,7 @@ final class AppState: ObservableObject {
     func clearReply(for chatJID: String) { replyStore.clear(chatJID) }
 
     let sidecar: SidecarManager
+    let updater: UpdateManager
     private var api: APIClient?
     private var runtimeClient: AppRuntimeClient?
     private let connectionRefresh: ConnectionRefreshCoordinator<AppRuntimeClient>
@@ -216,6 +217,7 @@ final class AppState: ObservableObject {
             try? await Task.sleep(for: .seconds(delay))
         },
         sidecar: SidecarManager = SidecarManager(),
+        updater: UpdateManager? = nil,
         attachmentLoad: @escaping @Sendable (URL, Int64) async throws -> Data = { url, maxBytes in
             try await AttachmentLoader.load(url: url, maxBytes: maxBytes)
         },
@@ -230,6 +232,7 @@ final class AppState: ObservableObject {
         self.performanceSignposts = performanceSignposts ?? PerformanceSignposts.sharedLifecycle
         self.performanceSignposts.beginLaunch()
         self.sidecar = sidecar
+        self.updater = updater ?? UpdateManager()
         self.runtimeClient = runtimeClient
         api = runtimeClient?.api
         connectionRefresh = ConnectionRefreshCoordinator(sleep: contactSleep)
@@ -254,6 +257,8 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables) // a sink must be retained to stay alive
         observeWake()
+        updater.onMessage = { [weak self] in self?.toast = $0 }
+        updater.startAutomaticChecks()
     }
 
     /// Toast auto-dismiss, restarted on every write; `toast = nil` re-enters

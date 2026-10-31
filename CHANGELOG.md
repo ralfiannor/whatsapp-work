@@ -21,6 +21,70 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 - Per-chat notification rules, media cache management UI, inbox-zero
   refinements, audio waveform thumbnails.
 
+## [0.2.0] - 2026-10-31
+
+**Install this release by hand once** if you run 0.1.0, which has no
+updater. From 0.2.0 on, the app updates itself.
+
+### Added
+
+- In-app updates from GitHub Releases. The app checks at launch, every
+  12 h, or via WhatsApp Work ▸ Check for Updates…. It installs a newer
+  release only if its DMG verifies against the maintainer's Ed25519
+  release key. The install happens at quit or on "Restart", as an atomic
+  bundle swap. `scripts/release.sh` builds, packages and signs a
+  release; see docs/releasing.md.
+- Send several images or files in one go. You can multi-select, paste,
+  or drop them on the chat or the composer. Files go out one at a time
+  (never in parallel, at most 30), and the draft is the first file's
+  caption. The batch stops at the first failure, and unsent files stay
+  staged.
+- wa.me and api.whatsapp.com links open in the app with their text
+  prefilled, including links clicked inside a transcript (Account ▸ Set
+  as wa.me Link Handler).
+- Delete your own messages for everyone, with a confirmation step.
+- Optional DM read-receipt suppression: chats are marked read locally
+  without telling the sender.
+- Resolved @mentions are coloured in the composer, so what you see is
+  what is sent.
+- A Save button in the image preview.
+
+### Changed
+
+- Enter sends; ⌘/⌥ Enter inserts a newline. The composer grows with its
+  text, and ⌘A selects all of it.
+- ⌘K search:
+  - fixed-height results;
+  - an esc button for mouse users;
+  - distinct "failed", "no results" and hint states;
+  - the ↑/↓ selection stays in view.
+- Log Out (which wipes local history) now asks first.
+- Keyboard:
+  - the snooze panel's H/T/W keys and the reaction panel's 1–4 keys work
+    as displayed;
+  - "Later today" (which meant one hour) is now "In 1 hour".
+- Accessibility:
+  - icon-only buttons are labelled;
+  - chat and inbox rows read as one element with their state;
+  - informative text has higher contrast;
+  - scroll animations respect Reduce Motion.
+
+### Fixed
+
+- Scrolling up through history no longer gets stuck, and the reading
+  position holds while an older page loads.
+- Failures that used to be silent are now shown:
+  - a core that failed or was stopped from outside the app gets a
+    banner with Restart;
+  - an inbox that fails to load shows Try Again;
+  - reactions and star / work-group toggles report errors.
+- Mentions: multi-word labels arrived corrupted on receivers, and token
+  digits now match the wire form.
+- The unread badge clears when a chat opens via the list selection.
+- A wa.me prefill now reaches a composer that is already open.
+- Running the unit tests no longer starts a real core, which used to
+  stop the core of a running copy of the app.
+
 ## [0.1.0] - 2026-09-13
 
 First public release. Native macOS work-inbox client for WhatsApp:
@@ -96,5 +160,6 @@ drift, SQL/performance, lifecycle state machines, adversarial input —
 - Unread counters: revoke decrements are idempotent across history
   replays; out-of-order read receipts cannot hide newer unread traffic.
 
-[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.1.0
