@@ -107,8 +107,9 @@ final class AppState: ObservableObject {
     /// dispatcher (Edit ▸ Paste replacement) only attaches clipboard images
     /// there; everywhere else ⌘V must keep pasting text.
     var composerFieldFocused = false
-    /// Clipboard image staged by the ⌘V dispatcher; ComposerBar attaches it.
-    @Published var pendingPasteImage: URL?
+    /// Files staged by the ⌘V dispatcher or a drop onto the transcript;
+    /// ComposerBar attaches them.
+    @Published var pendingAttachments: [URL] = []
     /// Nick-tap in the transcript asking the member panel to open a profile
     /// (chat-scoped: the panel lives inside that group's transcript).
     @Published var profileRequest: ProfileRequest?
@@ -1138,7 +1139,7 @@ final class AppState: ObservableObject {
         // not on the first /contacts load.
         contactNamesVersion += 1
         previewImage = nil
-        pendingPasteImage = nil
+        pendingAttachments = []
         mentionTargets = [:]
         chatsNextCursor = nil
         serverChats = [:]
@@ -1859,21 +1860,25 @@ final class AppState: ObservableObject {
     }
 
     /// ⌘V routing (replaces the system Edit ▸ Paste command): in the
-    /// composer, a clipboard image becomes the attachment; anything else —
+    /// composer, clipboard files or an image become attachments; anything else —
     /// or any other focus target — falls through to the standard text paste
     /// via the responder chain.
     @discardableResult
     func handlePaste() -> Bool {
-        let attachment = composerFieldFocused ? Self.pastedFileURL() : nil
+        let attachments = composerFieldFocused ? Self.pastedFileURLs() : []
         guard PasteRoutingPolicy.route(
             composerFocused: composerFieldFocused,
-            hasAttachment: attachment != nil
-        ) == .attachment, let attachment else {
+            hasAttachment: !attachments.isEmpty
+        ) == .attachment else {
             return false
         }
-        pendingPasteImage = attachment
+        pendingAttachments = attachments
         return true
     }
+
+    /// WhatsApp's own per-send media limit; also keeps a stray ⌘A-drop of a
+    /// whole folder from queueing hundreds of uploads (architecture R1).
+    static let maxAttachmentsPerSend = 30
 
     /// MIME type for an attachment from its extension: UTType lookup with an
     /// octet-stream fallback — the Go core maps unknowns to a document.
@@ -1886,17 +1891,17 @@ final class AppState: ObservableObject {
         return mime
     }
 
-    /// Resolves a clipboard attachment to a file URL: a copied FILE (Finder)
-    /// is used as-is whatever its type; raw image bytes (PNG, or TIFF
+    /// Resolves clipboard attachments to file URLs: copied FILES (Finder)
+    /// are used as-is whatever their type; raw image bytes (PNG, or TIFF
     /// converted to PNG — the screenshot format) are written to a temp
     /// file. An attachment wins over text when both are present (WhatsApp
-    /// Web convention). Returns nil when the clipboard carries neither.
-    static func pastedFileURL() -> URL? {
+    /// Web convention). Empty when the clipboard carries neither.
+    static func pastedFileURLs() -> [URL] {
         let pb = NSPasteboard.general
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
             .urlReadingFileURLsOnly: true,
-        ]) as? [URL], let url = urls.first {
-            return url
+        ]) as? [URL], !urls.isEmpty {
+            return urls
         }
         let data: Data
         if let png = pb.data(forType: .png) {
@@ -1906,15 +1911,16 @@ final class AppState: ObservableObject {
                   let png = rep.representation(using: .png, properties: [:]) {
             data = png
         } else {
-            return nil
+            return []
         }
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wf-paste-\(Int(Date().timeIntervalSince1970)).png")
+            // Unique per paste: several screenshots can be staged at once.
+            .appendingPathComponent("wf-paste-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).png")
         do {
             try data.write(to: url)
-            return url
+            return [url]
         } catch {
-            return nil
+            return []
         }
     }
 
@@ -2199,7 +2205,7 @@ final class AppState: ObservableObject {
             ) else {
                 return false
             }
-            toast = error.isTooLarge ? "File too large (max 20 MB)" : "Cannot read file"
+            toast = error.isTooLarge ? "\(filename) is too large (max 20 MB)" : "Cannot read \(filename)"
             return false
         } catch is CancellationError {
             return false
@@ -2211,7 +2217,7 @@ final class AppState: ObservableObject {
             ) else {
                 return false
             }
-            toast = "Cannot read file"
+            toast = "Cannot read \(filename)"
             return false
         }
         guard acceptsAttachmentWork(
@@ -2245,7 +2251,7 @@ final class AppState: ObservableObject {
                 generation: generation,
                 client: client
             ) else { return false }
-            toast = "Send image failed: \(error.localizedDescription)"
+            toast = "Sending \(filename) failed: \(error.localizedDescription)"
         }
         return false
     }
@@ -2436,6 +2442,17 @@ final class AppState: ObservableObject {
     /// a @MainActor class would otherwise inherit main-actor isolation).
        nonisolated static func downsampledImage(data: Data, maxPixel: CGFloat) -> DecodedImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return downsampledImage(source: src, maxPixel: maxPixel)
+    }
+
+    /// Same downsample straight from a file (staged-attachment thumbnails):
+    /// ImageIO reads only what the thumbnail needs, not the whole file.
+    nonisolated static func downsampledImage(url: URL, maxPixel: CGFloat) -> DecodedImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return downsampledImage(source: src, maxPixel: maxPixel)
+    }
+
+    private nonisolated static func downsampledImage(source src: CGImageSource, maxPixel: CGFloat) -> DecodedImage? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,

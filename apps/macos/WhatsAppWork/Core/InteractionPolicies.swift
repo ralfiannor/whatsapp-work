@@ -470,7 +470,7 @@ struct ChatMentionGenerationStore {
 struct ComposerMediaSendOperation: Equatable {
     let chatJID: String
     let draft: String
-    let attachmentURL: URL
+    let attachmentURLs: [URL]
     fileprivate let generation: Int
     fileprivate let submissionID: UInt64
 }
@@ -478,13 +478,15 @@ struct ComposerMediaSendOperation: Equatable {
 struct ComposerMediaSendCompletion: Equatable {
     let clearsOwnerDraft: Bool
     let clearsVisibleDraft: Bool
-    let clearsVisibleAttachment: Bool
+    /// Sent files still staged in the visible composer: they must leave
+    /// the staging strip so a second Enter cannot send them twice.
+    let removedAttachmentURLs: [URL]
 
     init(clearsOwnerDraft: Bool, clearsVisibleDraft: Bool,
-         clearsVisibleAttachment: Bool = false) {
+         removedAttachmentURLs: [URL] = []) {
         self.clearsOwnerDraft = clearsOwnerDraft
         self.clearsVisibleDraft = clearsVisibleDraft
-        self.clearsVisibleAttachment = clearsVisibleAttachment
+        self.removedAttachmentURLs = removedAttachmentURLs
     }
 }
 
@@ -492,7 +494,9 @@ struct ComposerMediaSendCompletion: Equatable {
 /// represents. A completion may clear the owner's stored caption while a
 /// different chat is visible, but it may mutate the shared ComposerBar state
 /// only while that same draft is displayed. Navigation can remove the
-/// attachment while preserving the draft, so those clear decisions are separate.
+/// attachments while preserving the draft, so those clear decisions are
+/// separate. The caption rides on the first file, so it counts as sent only
+/// once that file is.
 struct ComposerMediaSendTracker {
     private var generations: [String: Int] = [:]
     private var nextSubmissionID: UInt64 = 0
@@ -503,9 +507,9 @@ struct ComposerMediaSendTracker {
     mutating func begin(
         chatJID: String,
         draft: String,
-        attachmentURL: URL
+        attachmentURLs: [URL]
     ) -> ComposerMediaSendOperation? {
-        guard activeSubmissionID == nil else { return nil }
+        guard activeSubmissionID == nil, !attachmentURLs.isEmpty else { return nil }
         nextSubmissionID &+= 1
         let submissionID = nextSubmissionID
         activeSubmissionID = submissionID
@@ -513,7 +517,7 @@ struct ComposerMediaSendTracker {
         return ComposerMediaSendOperation(
             chatJID: chatJID,
             draft: draft,
-            attachmentURL: attachmentURL,
+            attachmentURLs: attachmentURLs,
             generation: generations[chatJID, default: 0],
             submissionID: submissionID
         )
@@ -523,13 +527,15 @@ struct ComposerMediaSendTracker {
         generations[chatJID, default: 0] += 1
     }
 
+    /// `sentURLs`: the files that went out, in order (a batch stops at its
+    /// first failure).
     mutating func completion(
         for operation: ComposerMediaSendOperation,
-        succeeded: Bool,
+        sentURLs: [URL],
         ownerDraft: String?,
         visibleChatJID: String,
         visibleDraft: String,
-        visibleAttachmentURL: URL?
+        visibleAttachmentURLs: [URL]
     ) -> ComposerMediaSendCompletion {
         guard activeSubmissionID == operation.submissionID else {
             return ComposerMediaSendCompletion(
@@ -538,18 +544,25 @@ struct ComposerMediaSendTracker {
             )
         }
         activeSubmissionID = nil
-        guard succeeded else {
+        guard sentURLs.first == operation.attachmentURLs.first else {
             return ComposerMediaSendCompletion(
                 clearsOwnerDraft: false,
                 clearsVisibleDraft: false
             )
         }
+        // Sent files leave the visible strip whatever happened to the
+        // caption meanwhile; a replacement staged after navigation is a
+        // different URL and stays.
+        let removed = visibleChatJID == operation.chatJID
+            ? sentURLs.filter { visibleAttachmentURLs.contains($0) }
+            : []
         let ownsCurrentComposition = generations[operation.chatJID] == operation.generation
             && (ownerDraft ?? "") == operation.draft
         guard ownsCurrentComposition else {
             return ComposerMediaSendCompletion(
                 clearsOwnerDraft: false,
-                clearsVisibleDraft: false
+                clearsVisibleDraft: false,
+                removedAttachmentURLs: removed
             )
         }
         let isDraftDisplayed = visibleChatJID == operation.chatJID
@@ -557,7 +570,7 @@ struct ComposerMediaSendTracker {
         return ComposerMediaSendCompletion(
             clearsOwnerDraft: true,
             clearsVisibleDraft: isDraftDisplayed,
-            clearsVisibleAttachment: isDraftDisplayed && visibleAttachmentURL == operation.attachmentURL
+            removedAttachmentURLs: removed
         )
     }
 }
@@ -572,7 +585,7 @@ struct ComposerMediaCompositionSnapshot: Equatable {
     let ownerDraft: String?
     let visibleChatJID: String
     let visibleDraft: String
-    let visibleAttachmentURL: URL?
+    let visibleAttachmentURLs: [URL]
 }
 
 struct ComposerMediaSubmitOutcome: Equatable {
@@ -584,10 +597,16 @@ struct ComposerMediaSubmitOutcome: Equatable {
 /// Owns the complete attachment-submit lifecycle used by ComposerBar. The
 /// synchronous reservation happens before `send` can reach the detached file
 /// loader, so queued button/keyboard actions cannot advance composition state
-/// or allocate a second attachment buffer.
+/// or allocate a second attachment buffer. Multiple files go out one at a
+/// time (conservative send rate, architecture R1); the caption rides on the
+/// first, and the batch stops at the first failure so the unsent files stay
+/// staged for a retry.
 @MainActor
 final class ComposerMediaSubmitAction: ObservableObject {
     @Published private(set) var isSubmitting = false
+    /// 1-based position of the file being sent, for "2/5" progress.
+    @Published private(set) var sendingIndex = 0
+    @Published private(set) var sendingTotal = 0
     private var tracker = ComposerMediaSendTracker()
 
     func noteCompositionChanged(for chatJID: String) {
@@ -597,7 +616,7 @@ final class ComposerMediaSubmitAction: ObservableObject {
     func submit(
         chatJID: String,
         draft: String,
-        attachmentURL: URL,
+        attachmentURLs: [URL],
         caption: String,
         send: @MainActor (ComposerMediaSubmitRequest) async -> Bool,
         completionState: @MainActor () -> ComposerMediaCompositionSnapshot
@@ -605,7 +624,7 @@ final class ComposerMediaSubmitAction: ObservableObject {
         guard let operation = tracker.begin(
             chatJID: chatJID,
             draft: draft,
-            attachmentURL: attachmentURL
+            attachmentURLs: attachmentURLs
         ) else {
             return ComposerMediaSubmitOutcome(
                 accepted: false,
@@ -618,25 +637,33 @@ final class ComposerMediaSubmitAction: ObservableObject {
         }
 
         isSubmitting = true
-        let request = ComposerMediaSubmitRequest(
-            chatJID: operation.chatJID,
-            attachmentURL: operation.attachmentURL,
-            caption: caption
-        )
-        let succeeded = await send(request)
+        sendingTotal = operation.attachmentURLs.count
+        var sent: [URL] = []
+        for (index, url) in operation.attachmentURLs.enumerated() {
+            sendingIndex = index + 1
+            let request = ComposerMediaSubmitRequest(
+                chatJID: operation.chatJID,
+                attachmentURL: url,
+                caption: index == 0 ? caption : ""
+            )
+            guard await send(request) else { break }
+            sent.append(url)
+        }
         let snapshot = completionState()
         let completion = tracker.completion(
             for: operation,
-            succeeded: succeeded,
+            sentURLs: sent,
             ownerDraft: snapshot.ownerDraft,
             visibleChatJID: snapshot.visibleChatJID,
             visibleDraft: snapshot.visibleDraft,
-            visibleAttachmentURL: snapshot.visibleAttachmentURL
+            visibleAttachmentURLs: snapshot.visibleAttachmentURLs
         )
         isSubmitting = tracker.isSubmitting
+        sendingIndex = 0
+        sendingTotal = 0
         return ComposerMediaSubmitOutcome(
             accepted: true,
-            succeeded: succeeded,
+            succeeded: sent.count == operation.attachmentURLs.count,
             completion: completion
         )
     }

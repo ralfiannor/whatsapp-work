@@ -7,6 +7,7 @@ struct TranscriptView: View {
     @EnvironmentObject var state: AppState
 
     @State private var nickColWidth: CGFloat = 90
+    @State private var dropTargeted = false
     /// mIRC-style nick panel visibility (groups only), persisted.
     @AppStorage("showMemberPanel") var showMemberPanel = true
     /// Transcript typography (persisted): body size + vertical density.
@@ -40,6 +41,28 @@ struct TranscriptView: View {
                             pageRenderVersion: state.selectedMessagePageRenderVersion)
                 Divider()
                 ComposerBar(chatJID: chatJID)
+            }
+            // Files dragged anywhere over the chat stage as attachments
+            // (the composer field routes its own drops the same way).
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                state.pendingAttachments = files
+                return true
+            } isTargeted: { dropTargeted = $0 }
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.08)))
+                        .overlay(
+                            Text("Drop files to attach")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.accentColor)
+                        )
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
             }
             if isGroup && showMemberPanel {
                 Divider()
@@ -673,9 +696,10 @@ struct ComposerBar: View {
     @EnvironmentObject var state: AppState
     @State private var draft = ""
     @State private var fieldFocused = false
-    /// Picked-but-not-sent file. Two-step attach: paperclip only picks,
-    /// the user types a caption, Enter / send ships them together.
-    @State private var attachmentURL: URL?
+    /// Picked-but-not-sent files. Two-step attach: paperclip, paste and
+    /// drop only stage; the user types a caption, Enter / send ships them
+    /// together (the caption rides on the first file).
+    @State private var attachments: [URL] = []
     @StateObject private var mediaSubmitAction = ComposerMediaSubmitAction()
     @State private var mentionMembers: [APIClient.GroupMember] = []
     @State private var mentionPrefix = ""
@@ -703,7 +727,7 @@ struct ComposerBar: View {
     var body: some View {
         VStack(spacing: 6) {
             replyBanner
-            attachmentBanner
+            attachmentStrip
             inputRow
         }
         .padding(10)
@@ -734,10 +758,10 @@ struct ComposerBar: View {
                 Task { await state.commitRead(chatJID, source: .composerFocus) }
             }
         }
-        .onChange(of: state.pendingPasteImage) { _, url in
-            guard let url else { return }
-            attach(url: url)
-            state.pendingPasteImage = nil
+        .onChange(of: state.pendingAttachments) { _, urls in
+            guard !urls.isEmpty else { return }
+            attach(urls)
+            state.pendingAttachments = []
         }
         .onChange(of: state.pendingMentionInsert) { _, label in
             guard let label else { return }
@@ -747,7 +771,7 @@ struct ComposerBar: View {
         }
         .onChange(of: chatJID) { _, newChat in
             draft = state.draftStore[newChat] ?? ""
-            attachmentURL = nil // a picked image belongs to the chat it was picked in
+            attachments = [] // staged files belong to the chat they were picked in
             mentionActive = false
             mentionPrefix = ""
             // Roster MUST follow the chat: mentionMembers is @State fetched
@@ -792,28 +816,48 @@ struct ComposerBar: View {
         }
     }
 
-    /// Picked image waiting to be sent: file name + remove, same quiet chip
-    /// style as the reply banner. File metadata belongs to the async loader.
+    /// Staged files waiting to be sent: one chip per file (thumbnail for
+    /// images) in the reply banner's quiet style. Chips lock while a send is
+    /// in flight — the batch was captured when it started.
     @ViewBuilder
-    private var attachmentBanner: some View {
-        if let url = attachmentURL {
-            HStack(spacing: 8) {
-                Image(systemName: Self.attachIcon(for: url)).foregroundStyle(.secondary)
-                Text(url.lastPathComponent)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    removeAttachment()
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+    private var attachmentStrip: some View {
+        if !attachments.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                if attachments.count > 1 {
+                    HStack(spacing: 8) {
+                        Text(attachmentStatus)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if !mediaSubmitAction.isSubmitting {
+                            Button("Remove all") { removeAllAttachments() }
+                                .font(.system(size: 10, design: .monospaced))
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Remove attachment")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachments, id: \.self) { url in
+                            AttachmentChip(url: url, removable: !mediaSubmitAction.isSubmitting) {
+                                removeAttachment(url)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 30)
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.35)))
         }
+    }
+
+    private var attachmentStatus: String {
+        if mediaSubmitAction.isSubmitting {
+            return "Sending \(mediaSubmitAction.sendingIndex) of \(mediaSubmitAction.sendingTotal)…"
+        }
+        return "\(attachments.count) files — the message goes as the first file's caption"
     }
 
     private var inputRow: some View {
@@ -821,11 +865,12 @@ struct ComposerBar: View {
             if mediaSubmitAction.isSubmitting || state.sendingMedia {
                 ProgressView().controlSize(.small).padding(.bottom, 10)
             }
-            Button(action: pickFile) {
+            Button(action: pickFiles) {
                 Image(systemName: "paperclip")
             }
             .buttonStyle(.plain)
-            .help("Attach file — pick now, type a caption, send together")
+            .help("Attach files (or paste / drop them) — type a caption, send together")
+            .accessibilityLabel("Attach files")
             .padding(.bottom, 6)
             inputField
             Button(action: { Task { await submit() } }) {
@@ -840,34 +885,60 @@ struct ComposerBar: View {
     private var canSend: Bool {
         mediaSubmitAction.isSubmitting == false &&
             state.sendingMedia == false &&
-            (attachmentURL != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            (!attachments.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
-    /// Two-step attach: the panel only PICKS (any file — documents, video,
-    /// audio, images; the core maps the MIME to the right WhatsApp kind).
+    /// Two-step attach: the panel only PICKS (any files — documents, video,
+    /// audio, images; the core maps each MIME to the right WhatsApp kind).
     /// Caption is typed afterwards in the normal composer; Enter (or the
-    /// plane) ships file + text together.
-    private func pickFile() {
+    /// plane) ships files + text together.
+    private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        attach(url: url)
+        guard panel.runModal() == .OK else { return }
+        attach(panel.urls)
     }
 
-    /// Shared attach path for picker and clipboard paste: stage the file and
-    /// drop the caret into the caption field. Bumping the focus request
-    /// (instead of setting fieldFocused directly) is what actually focuses
-    /// the NSTextView via MentionTextView's focusRequest.
-    private func attach(url: URL) {
+    /// Shared attach path for picker, clipboard paste and drops: stage the
+    /// files (deduplicated, folders skipped, capped per send) and drop the
+    /// caret into the caption field. Bumping the focus request (instead of
+    /// setting fieldFocused directly) is what actually focuses the
+    /// NSTextView via MentionTextView's focusRequest.
+    private func attach(_ urls: [URL]) {
+        guard !mediaSubmitAction.isSubmitting else {
+            state.toast = "Wait for the current files to finish sending"
+            return
+        }
+        let files = urls.filter {
+            $0.isFileURL && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+        }
+        guard !files.isEmpty else {
+            state.toast = "Folders can't be sent — pick the files inside"
+            return
+        }
+        var staged = attachments
+        for url in files where !staged.contains(url) {
+            guard staged.count < AppState.maxAttachmentsPerSend else {
+                state.toast = "Up to \(AppState.maxAttachmentsPerSend) files per send"
+                break
+            }
+            staged.append(url)
+        }
+        guard staged != attachments else { return }
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
-        attachmentURL = url
+        attachments = staged
         state.composerFocusRequest += 1
     }
 
-    private func removeAttachment() {
+    private func removeAttachment(_ url: URL) {
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
-        attachmentURL = nil
+        attachments.removeAll { $0 == url }
+    }
+
+    private func removeAllAttachments() {
+        mediaSubmitAction.noteCompositionChanged(for: chatJID)
+        attachments = []
     }
 
     private var inputField: some View {
@@ -890,6 +961,7 @@ struct ComposerBar: View {
                     },
                     onEnter: { submitFromKeyboard() },
                     onFocusChange: { fieldFocused = $0 },
+                    onFileDrop: { attach($0) },
                     focusRequest: state.composerFocusRequest
                 )
                 // Placeholder: an NSTextView has none of its own. Offsets
@@ -1008,13 +1080,13 @@ struct ComposerBar: View {
     private func submit() async {
         guard !mediaSubmitAction.isSubmitting else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Attachment flow: image + caption (draft) leave together.
-        if let url = attachmentURL {
+        // Attachment flow: files + caption (draft) leave together.
+        if !attachments.isEmpty {
             let ownerChatJID = chatJID
             let outcome = await mediaSubmitAction.submit(
                 chatJID: ownerChatJID,
                 draft: draft,
-                attachmentURL: url,
+                attachmentURLs: attachments,
                 caption: text,
                 send: { request in
                     await state.sendAttachment(
@@ -1028,7 +1100,7 @@ struct ComposerBar: View {
                         ownerDraft: state.draftStore[ownerChatJID],
                         visibleChatJID: state.selectedChat ?? "",
                         visibleDraft: draft,
-                        visibleAttachmentURL: attachmentURL
+                        visibleAttachmentURLs: attachments
                     )
                 }
             )
@@ -1039,8 +1111,9 @@ struct ComposerBar: View {
                 draft = ""
                 mentionActive = false
             }
-            if outcome.completion.clearsVisibleAttachment {
-                attachmentURL = nil
+            let sent = outcome.completion.removedAttachmentURLs
+            if !sent.isEmpty {
+                attachments.removeAll { sent.contains($0) }
             }
             return
         }
@@ -1051,6 +1124,52 @@ struct ComposerBar: View {
             await state.sendReply(text, in: chatJID)
         } else {
             await state.send(text, in: chatJID)
+        }
+    }
+}
+
+/// One staged file in the composer strip: image thumbnail (ImageIO
+/// downsample in a detached task, never full pixels) or a kind icon, the
+/// file name, and a remove button.
+private struct AttachmentChip: View {
+    let url: URL
+    let removable: Bool
+    let onRemove: () -> Void
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Group {
+                if let thumbnail {
+                    Image(nsImage: thumbnail).resizable().scaledToFill()
+                } else {
+                    Image(systemName: ComposerBar.attachIcon(for: url)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 24, height: 24)
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+            Text(url.lastPathComponent)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 160, alignment: .leading)
+            if removable {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove \(url.lastPathComponent)")
+                .accessibilityLabel("Remove \(url.lastPathComponent)")
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary.opacity(0.5)))
+        .task(id: url) {
+            guard AppState.mime(forExtension: url.pathExtension).hasPrefix("image/") else { return }
+            let decoded = await Task.detached(priority: .utility) {
+                AppState.downsampledImage(url: url, maxPixel: 64)
+            }.value
+            thumbnail = decoded?.image
         }
     }
 }

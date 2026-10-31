@@ -3742,14 +3742,14 @@ final class RuntimePoliciesTests: XCTestCase {
                 ownerDraft: state.draftStore[chat],
                 visibleChatJID: state.selectedChat ?? "",
                 visibleDraft: visibleDraft,
-                visibleAttachmentURL: visibleAttachment
+                visibleAttachmentURLs: visibleAttachment.map { [$0] } ?? []
             )
         }
         let firstSend = Task {
             await action.submit(
                 chatJID: chat,
                 draft: caption,
-                attachmentURL: attachment,
+                attachmentURLs: [attachment],
                 caption: caption,
                 send: send,
                 completionState: completionState
@@ -3760,7 +3760,7 @@ final class RuntimePoliciesTests: XCTestCase {
         let duplicate = await action.submit(
             chatJID: chat,
             draft: caption,
-            attachmentURL: attachment,
+            attachmentURLs: [attachment],
             caption: caption,
             send: send,
             completionState: completionState
@@ -3777,7 +3777,7 @@ final class RuntimePoliciesTests: XCTestCase {
         XCTAssertTrue(first.accepted)
         XCTAssertTrue(first.succeeded)
         if first.completion.clearsOwnerDraft { state.draftStore[chat] = "" }
-        XCTAssertTrue(first.completion.clearsVisibleAttachment)
+        XCTAssertEqual(first.completion.removedAttachmentURLs, [attachment])
         if first.completion.clearsVisibleDraft {
             visibleDraft = ""
             visibleAttachment = nil
@@ -3826,7 +3826,7 @@ final class RuntimePoliciesTests: XCTestCase {
             await action.submit(
                 chatJID: chat,
                 draft: caption,
-                attachmentURL: attachment,
+                attachmentURLs: [attachment],
                 caption: caption,
                 send: { request in
                     await state.sendAttachment(
@@ -3840,7 +3840,7 @@ final class RuntimePoliciesTests: XCTestCase {
                         ownerDraft: state.draftStore[chat],
                         visibleChatJID: chat,
                         visibleDraft: caption,
-                        visibleAttachmentURL: attachment
+                        visibleAttachmentURLs: [attachment]
                     )
                 }
             )
@@ -4104,7 +4104,7 @@ final class RuntimePoliciesTests: XCTestCase {
     }
 
     @MainActor
-    func testAttachmentSendPreservesExistingReadErrorMessages() async {
+    func testAttachmentSendReadErrorsNameTheFile() async {
         let endpoints = RuntimeEndpointProbe()
         let client = makeAppRuntimeClient(endpoints)
         let unreadable = AppState(
@@ -4124,14 +4124,14 @@ final class RuntimePoliciesTests: XCTestCase {
             in: "a@s.whatsapp.net"
         )
         XCTAssertFalse(unreadableResult)
-        XCTAssertEqual(unreadable.toast, "Cannot read file")
+        XCTAssertEqual(unreadable.toast, "Cannot read missing.bin")
         let tooLargeResult = await tooLarge.sendAttachment(
             url: URL(fileURLWithPath: "/large.bin"),
             caption: "",
             in: "a@s.whatsapp.net"
         )
         XCTAssertFalse(tooLargeResult)
-        XCTAssertEqual(tooLarge.toast, "File too large (max 20 MB)")
+        XCTAssertEqual(tooLarge.toast, "large.bin is too large (max 20 MB)")
         XCTAssertTrue(endpoints.mediaRequests.isEmpty)
     }
 
