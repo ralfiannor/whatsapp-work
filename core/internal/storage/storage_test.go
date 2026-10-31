@@ -74,19 +74,19 @@ func TestInsertMessageIdempotent(t *testing.T) {
 	}
 	m := msg("m1", "a@s.whatsapp.net", "a@s.whatsapp.net", false, 1700000001, "hello")
 
-	isNew, err := st.InsertMessage(ctx, &m)
-	if err != nil || !isNew {
-		t.Fatalf("first insert: isNew=%v err=%v", isNew, err)
+	outcome, err := st.InsertMessage(ctx, &m)
+	if err != nil || outcome != storage.InsertNew {
+		t.Fatalf("first insert: outcome=%v err=%v", outcome, err)
 	}
 	rowID := m.ID
 
 	dup := m
-	isNew, err = st.InsertMessage(ctx, &dup)
+	outcome, err = st.InsertMessage(ctx, &dup)
 	if err != nil {
 		t.Fatalf("dup insert err: %v", err)
 	}
-	if isNew {
-		t.Fatal("duplicate insert reported as new")
+	if outcome != storage.InsertDuplicate {
+		t.Fatalf("duplicate insert outcome = %v, want InsertDuplicate", outcome)
 	}
 	if dup.ID != rowID {
 		t.Fatalf("duplicate got different row id %d, want %d", dup.ID, rowID)

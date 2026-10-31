@@ -87,6 +87,33 @@ func BenchmarkInsertMessagesBatch(b *testing.B) {
 	b.ReportMetric(float64(b.N*500)/b.Elapsed().Seconds(), "rows/s")
 }
 
+// BenchmarkInsertMessagesRedeliver measures re-ingesting rows we already
+// hold — every row of a login's full history re-sync takes this path.
+func BenchmarkInsertMessagesRedeliver(b *testing.B) {
+	st, jid := seedBenchFixture(b)
+	ctx := context.Background()
+	n := benchFixtureSize()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var buf []core.Message
+		for j := 0; j < 500; j++ {
+			k := (i*500 + j) % n
+			buf = append(buf, core.Message{
+				MessageID: fmt.Sprintf("b%d", k), ChatJID: jid, SenderJID: jid,
+				Timestamp: int64(1_700_000_000 + k), Kind: core.KindText,
+				Text: fmt.Sprintf("message %d about %s plans", k, fillerWord(k)),
+				Source: "history", MentionedJIDs: []string{},
+			})
+		}
+		if _, err := st.InsertMessages(ctx, buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(b.N*500)/b.Elapsed().Seconds(), "rows/s")
+}
+
 // BenchmarkListMessagesPage is the chat-switch storage cost (page 1, 50 rows).
 func BenchmarkListMessagesPage(b *testing.B) {
 	st, jid := seedBenchFixture(b)

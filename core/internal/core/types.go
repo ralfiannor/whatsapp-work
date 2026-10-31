@@ -28,6 +28,15 @@ const (
 	KindUnsupported MessageKind = "unsupported"
 )
 
+// Placeholder raw kinds of an unsupported row: the message failed to decrypt
+// and its content has not arrived (yet). A re-delivery carrying any real
+// classification replaces them in place — storage's upgrade rule keys off
+// these names.
+const (
+	RawKindPending  = "pending"   // waiting for a re-send (sender or own phone)
+	RawKindViewOnce = "view_once" // view-once media: only the phone may open it
+)
+
 // ConnState is the login/connection lifecycle state surfaced to the UI.
 type ConnState string
 

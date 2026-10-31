@@ -325,14 +325,21 @@ func (a *App) ingestMessage(ctx context.Context, e core.EventMessage) {
 
 	case core.IncomingNew:
 		a.ensureChatFor(ctx, &inc.Message)
-		isNew, err := a.store.InsertMessage(ctx, &inc.Message)
+		outcome, err := a.store.InsertMessage(ctx, &inc.Message)
 		if err != nil {
 			a.ingestError("insert message "+inc.Message.MessageID, err)
 			return
 		}
 		a.messagesIngested.Add(1)
-		if !isNew {
+		switch outcome {
+		case storage.InsertDuplicate:
 			return // duplicate delivery (history/live overlap) — already durable
+		case storage.InsertUpgraded:
+			// A placeholder got its content (decrypt-failure re-send): the
+			// row the UI holds is stale — push the stored version.
+			a.emitMessageUpdated(ctx, inc.Message.ChatJID, inc.Message.MessageID)
+			a.emitChatUpdated(ctx, inc.Message.ChatJID)
+			return
 		}
 		// @lid traffic means the LID→PN mapping is still growing; a later
 		// name pass can canonicalize senders and name chats it couldn't.

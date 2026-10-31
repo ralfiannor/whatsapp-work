@@ -92,6 +92,29 @@ enum MessageTextRenderer {
         }
         return wrapped
     }
+
+    /// Content-less rows the core keeps as placeholders: protocol types it
+    /// does not render (polls, contact cards…) and messages that failed to
+    /// decrypt, waiting for a re-send. Mirrors the core's
+    /// storage.UnsupportedLabel so such a line is never blank.
+    static func placeholderLabel(_ m: Message) -> String? {
+        guard m.kind == "unsupported", !m.revoked,
+              (m.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        switch m.raw_kind ?? "" {
+        case "pending": return "Waiting for this message"
+        case "view_once": return "View once message (open it on your phone)"
+        case "skdm": return "Message not synced yet"
+        case "template", "interactive": return "Interactive message"
+        case "contact_card": return "Contact card"
+        case "group_invite": return "Group invite"
+        case "poll": return "Poll"
+        case "album": return "Album"
+        case "location", "live_location": return "Location"
+        case "product": return "Product"
+        case "event": return "Event"
+        default: return "Message"
+        }
+    }
 }
 
 // MARK: - mIRC-style line rendering
@@ -147,9 +170,10 @@ struct IRCLineText: View {
     }
 
     private var attributed: AttributedString {
-        // v10 key: adds the wa.me link-rewrite (v9 inputs unchanged) —
-        // same message, different link destinations after the routing fix.
-        let key = "v10|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(state.contactNamesVersion)"
+        // v11 key: adds kind/raw_kind — a placeholder row upgrades in place
+        // (same id, often still empty text) when its content arrives, and
+        // its label must not outlive the upgrade.
+        let key = "v11|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.kind)|\(message.raw_kind ?? "")|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(state.contactNamesVersion)"
         if let hit = Self.cache[key] {
             return hit
         }
@@ -325,6 +349,13 @@ struct IRCLineText: View {
                     out += styled
                 }
             }
+        }
+
+        if let label = MessageTextRenderer.placeholderLabel(message) {
+            var run = AttributedString(label)
+            run.foregroundColor = .secondary
+            run.font = .system(size: fontSize, design: .monospaced).italic()
+            out += run
         }
 
         // suffixes: edited, revoked — inline tail. Receipts render inline

@@ -739,3 +739,51 @@ func TestNormalizeOwnLIDMentionViaMap(t *testing.T) {
 		t.Fatal("foreign LID mention matched own identity")
 	}
 }
+
+// A decrypt failure becomes a visible placeholder on the exact key the
+// decrypted copy will carry (so it upgrades in place); hidden-mode failures
+// and out-of-scope chats stay invisible.
+func TestNormalizeUndecryptablePlaceholder(t *testing.T) {
+	lid := "11111111111111@lid"
+	lidToPN := map[string]string{lid: alice}
+	evt := &events.UndecryptableMessage{Info: info(group, lid, false, "u1")}
+
+	inc := whatsapp.NormalizeUndecryptable(evt, lidToPN)
+	if inc.Kind != core.IncomingNew {
+		t.Fatalf("kind = %v, want IncomingNew", inc.Kind)
+	}
+	m := inc.Message
+	if m.Kind != core.KindUnsupported || m.RawKind != core.RawKindPending ||
+		m.Source != "live" || m.Text != "" || m.Timestamp != msgTS {
+		t.Fatalf("placeholder = %+v", m)
+	}
+	copyOf, err := whatsapp.Normalize([]string{me},
+		&events.Message{Info: evt.Info, Message: &waE2E.Message{Conversation: str("the real text")}},
+		"live", lidToPN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := [3]string{m.ChatJID, m.SenderJID, m.MessageID},
+		[3]string{copyOf.Message.ChatJID, copyOf.Message.SenderJID, copyOf.Message.MessageID}; got != want {
+		t.Fatalf("placeholder key %v != decrypted copy key %v", got, want)
+	}
+	if m.SenderJID != alice {
+		t.Fatalf("sender = %q, want canonical %q", m.SenderJID, alice)
+	}
+
+	viewOnce := &events.UndecryptableMessage{Info: info(group, alice, false, "u2"),
+		IsUnavailable: true, UnavailableType: events.UnavailableTypeViewOnce}
+	if got := whatsapp.NormalizeUndecryptable(viewOnce, nil).Message.RawKind; got != core.RawKindViewOnce {
+		t.Fatalf("view-once raw kind = %q", got)
+	}
+
+	for name, e := range map[string]*events.UndecryptableMessage{
+		"hidden":     {Info: info(group, alice, false, "u3"), DecryptFailMode: events.DecryptFailHide},
+		"newsletter": {Info: info("120363000000000001@newsletter", alice, false, "u4")},
+		"status":     {Info: info("status@broadcast", alice, false, "u5")},
+	} {
+		if got := whatsapp.NormalizeUndecryptable(e, nil).Kind; got != core.IncomingIgnore {
+			t.Errorf("%s: kind = %v, want IncomingIgnore", name, got)
+		}
+	}
+}
