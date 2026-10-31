@@ -139,16 +139,16 @@ final class InteractionPoliciesTests: XCTestCase {
         let operationCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chatA,
             draft: "caption A",
-            attachmentURL: sentURL
+            attachmentURLs: [sentURL]
         )
         let operation = try XCTUnwrap(operationCandidate)
         let completion = tracker.completion(
             for: operation,
-            succeeded: true,
+            sentURLs: operation.attachmentURLs,
             ownerDraft: drafts[chatA],
             visibleChatJID: visibleChat,
             visibleDraft: visibleDraft,
-            visibleAttachmentURL: visibleAttachment
+            visibleAttachmentURLs: visibleAttachment.map { [$0] } ?? []
         )
         if completion.clearsOwnerDraft { drafts[operation.chatJID] = "" }
         if completion.clearsVisibleDraft {
@@ -170,18 +170,18 @@ final class InteractionPoliciesTests: XCTestCase {
         let operationCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "old",
-            attachmentURL: url
+            attachmentURLs: [url]
         )
         let operation = try XCTUnwrap(operationCandidate)
         tracker.noteCompositionChanged(for: chat)
 
         let completion = tracker.completion(
             for: operation,
-            succeeded: true,
+            sentURLs: operation.attachmentURLs,
             ownerDraft: "new",
             visibleChatJID: chat,
             visibleDraft: "new",
-            visibleAttachmentURL: url
+            visibleAttachmentURLs: [url]
         )
 
         XCTAssertFalse(completion.clearsOwnerDraft)
@@ -196,17 +196,17 @@ final class InteractionPoliciesTests: XCTestCase {
         let operationCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chatA,
             draft: "same",
-            attachmentURL: url
+            attachmentURLs: [url]
         )
         let operation = try XCTUnwrap(operationCandidate)
 
         let completion = tracker.completion(
             for: operation,
-            succeeded: true,
+            sentURLs: operation.attachmentURLs,
             ownerDraft: "same",
             visibleChatJID: chatB,
             visibleDraft: "same",
-            visibleAttachmentURL: url
+            visibleAttachmentURLs: [url]
         )
 
         XCTAssertTrue(completion.clearsOwnerDraft)
@@ -221,18 +221,18 @@ final class InteractionPoliciesTests: XCTestCase {
         let operationCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "caption",
-            attachmentURL: sentURL
+            attachmentURLs: [sentURL]
         )
         let operation = try XCTUnwrap(operationCandidate)
         tracker.noteCompositionChanged(for: chat)
 
         let completion = tracker.completion(
             for: operation,
-            succeeded: true,
+            sentURLs: operation.attachmentURLs,
             ownerDraft: "caption",
             visibleChatJID: chat,
             visibleDraft: "caption",
-            visibleAttachmentURL: replacementURL
+            visibleAttachmentURLs: [replacementURL]
         )
 
         XCTAssertFalse(completion.clearsOwnerDraft)
@@ -246,18 +246,18 @@ final class InteractionPoliciesTests: XCTestCase {
         let firstCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "keep this caption",
-            attachmentURL: url
+            attachmentURLs: [url]
         )
         let first = try XCTUnwrap(firstCandidate)
         XCTAssertTrue(tracker.isSubmitting)
 
         let failure = tracker.completion(
             for: first,
-            succeeded: false,
+            sentURLs: [],
             ownerDraft: "keep this caption",
             visibleChatJID: chat,
             visibleDraft: "keep this caption",
-            visibleAttachmentURL: url
+            visibleAttachmentURLs: [url]
         )
 
         XCTAssertFalse(failure.clearsOwnerDraft)
@@ -266,7 +266,7 @@ final class InteractionPoliciesTests: XCTestCase {
         let retry: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "keep this caption",
-            attachmentURL: url
+            attachmentURLs: [url]
         )
         XCTAssertNotNil(retry)
     }
@@ -281,7 +281,7 @@ final class InteractionPoliciesTests: XCTestCase {
             var visibleDraft = "sent caption"
             var visibleAttachment: URL? = attachment
             let outcome = await action.submit(
-                chatJID: "A", draft: visibleDraft, attachmentURL: attachment, caption: visibleDraft,
+                chatJID: "A", draft: visibleDraft, attachmentURLs: [attachment], caption: visibleDraft,
                 send: { request in
                     XCTAssertEqual(request.chatJID, "A")
                     XCTAssertEqual(request.caption, "sent caption")
@@ -309,15 +309,121 @@ final class InteractionPoliciesTests: XCTestCase {
                 completionState: {
                     ComposerMediaCompositionSnapshot(ownerDraft: ownerDraft,
                         visibleChatJID: visibleChat, visibleDraft: visibleDraft,
-                        visibleAttachmentURL: visibleAttachment)
+                        visibleAttachmentURLs: visibleAttachment.map { [$0] } ?? [])
                 }
             )
             XCTAssertTrue(outcome.accepted)
             XCTAssertTrue(outcome.succeeded)
             XCTAssertEqual(outcome.completion.clearsOwnerDraft, edit == "none", edit)
             XCTAssertEqual(outcome.completion.clearsVisibleDraft, edit == "none", edit)
-            XCTAssertFalse(outcome.completion.clearsVisibleAttachment, edit)
+            XCTAssertEqual(outcome.completion.removedAttachmentURLs, [], edit)
         }
+    }
+
+    func testMediaBatchSendsInOrderWithCaptionOnFirstFileOnly() async {
+        let chat = "a@s.whatsapp.net"
+        let files = ["/tmp/1.png", "/tmp/2.jpg", "/tmp/3.pdf"].map { URL(fileURLWithPath: $0) }
+        let action = ComposerMediaSubmitAction()
+        var requests: [ComposerMediaSubmitRequest] = []
+        var progress: [String] = []
+
+        let outcome = await action.submit(
+            chatJID: chat, draft: "caption", attachmentURLs: files, caption: "caption",
+            send: { request in
+                requests.append(request)
+                progress.append("\(action.sendingIndex)/\(action.sendingTotal)")
+                XCTAssertTrue(action.isSubmitting)
+                return true
+            },
+            completionState: {
+                ComposerMediaCompositionSnapshot(ownerDraft: "caption", visibleChatJID: chat,
+                                                 visibleDraft: "caption", visibleAttachmentURLs: files)
+            }
+        )
+
+        XCTAssertEqual(requests.map(\.attachmentURL), files)
+        XCTAssertEqual(requests.map(\.caption), ["caption", "", ""])
+        XCTAssertEqual(requests.map(\.chatJID), [chat, chat, chat])
+        XCTAssertEqual(progress, ["1/3", "2/3", "3/3"])
+        XCTAssertTrue(outcome.succeeded)
+        XCTAssertTrue(outcome.completion.clearsOwnerDraft)
+        XCTAssertTrue(outcome.completion.clearsVisibleDraft)
+        XCTAssertEqual(outcome.completion.removedAttachmentURLs, files)
+        XCTAssertFalse(action.isSubmitting)
+        XCTAssertEqual(action.sendingTotal, 0)
+    }
+
+    func testMediaBatchStopsAtFirstFailureAndKeepsUnsentFilesStaged() async {
+        let chat = "a@s.whatsapp.net"
+        let files = ["/tmp/1.png", "/tmp/2.png", "/tmp/3.png"].map { URL(fileURLWithPath: $0) }
+        let action = ComposerMediaSubmitAction()
+        var attempted: [URL] = []
+
+        let outcome = await action.submit(
+            chatJID: chat, draft: "caption", attachmentURLs: files, caption: "caption",
+            send: { request in
+                attempted.append(request.attachmentURL)
+                return request.attachmentURL != files[1]
+            },
+            completionState: {
+                ComposerMediaCompositionSnapshot(ownerDraft: "caption", visibleChatJID: chat,
+                                                 visibleDraft: "caption", visibleAttachmentURLs: files)
+            }
+        )
+
+        XCTAssertEqual(attempted, [files[0], files[1]], "no sends after the first failure")
+        XCTAssertFalse(outcome.succeeded)
+        // The caption went out with file 1: clearing it prevents a resend.
+        XCTAssertTrue(outcome.completion.clearsOwnerDraft)
+        XCTAssertTrue(outcome.completion.clearsVisibleDraft)
+        XCTAssertEqual(outcome.completion.removedAttachmentURLs, [files[0]])
+        XCTAssertFalse(action.isSubmitting)
+    }
+
+    func testMediaBatchFirstFileFailureKeepsWholeComposition() async {
+        let chat = "a@s.whatsapp.net"
+        let files = ["/tmp/1.png", "/tmp/2.png"].map { URL(fileURLWithPath: $0) }
+        let action = ComposerMediaSubmitAction()
+        var attempts = 0
+
+        let outcome = await action.submit(
+            chatJID: chat, draft: "caption", attachmentURLs: files, caption: "caption",
+            send: { _ in attempts += 1; return false },
+            completionState: {
+                ComposerMediaCompositionSnapshot(ownerDraft: "caption", visibleChatJID: chat,
+                                                 visibleDraft: "caption", visibleAttachmentURLs: files)
+            }
+        )
+
+        XCTAssertEqual(attempts, 1)
+        XCTAssertFalse(outcome.completion.clearsOwnerDraft)
+        XCTAssertFalse(outcome.completion.clearsVisibleDraft)
+        XCTAssertEqual(outcome.completion.removedAttachmentURLs, [])
+    }
+
+    func testMediaBatchSentFilesLeaveStripEvenAfterCaptionEdit() throws {
+        let chat = "a@s.whatsapp.net"
+        let files = ["/tmp/1.png", "/tmp/2.png"].map { URL(fileURLWithPath: $0) }
+        let added = URL(fileURLWithPath: "/tmp/added-later.png")
+        var tracker = ComposerMediaSendTracker()
+        let operation = try XCTUnwrap(tracker.begin(chatJID: chat, draft: "old", attachmentURLs: files))
+        tracker.noteCompositionChanged(for: chat)
+
+        let completion = tracker.completion(
+            for: operation, sentURLs: files, ownerDraft: "typed meanwhile",
+            visibleChatJID: chat, visibleDraft: "typed meanwhile",
+            visibleAttachmentURLs: files + [added]
+        )
+
+        XCTAssertFalse(completion.clearsOwnerDraft, "newer typing survives")
+        XCTAssertFalse(completion.clearsVisibleDraft)
+        XCTAssertEqual(completion.removedAttachmentURLs, files, "sent files never stay staged")
+    }
+
+    func testMediaTrackerRejectsEmptyBatch() {
+        var tracker = ComposerMediaSendTracker()
+        XCTAssertNil(tracker.begin(chatJID: "a@s.whatsapp.net", draft: "", attachmentURLs: []))
+        XCTAssertFalse(tracker.isSubmitting)
     }
 
     func testComposerMediaSubmitActionForwardsFailureAndAllowsRetry() async {
@@ -331,14 +437,14 @@ final class InteractionPoliciesTests: XCTestCase {
                 ownerDraft: caption,
                 visibleChatJID: chat,
                 visibleDraft: caption,
-                visibleAttachmentURL: url
+                visibleAttachmentURLs: [url]
             )
         }
 
         let failure = await action.submit(
             chatJID: chat,
             draft: caption,
-            attachmentURL: url,
+            attachmentURLs: [url],
             caption: caption,
             send: { request in
                 sendInvocations += 1
@@ -359,7 +465,7 @@ final class InteractionPoliciesTests: XCTestCase {
         let retry = await action.submit(
             chatJID: chat,
             draft: caption,
-            attachmentURL: url,
+            attachmentURLs: [url],
             caption: caption,
             send: { _ in
                 sendInvocations += 1
@@ -372,7 +478,7 @@ final class InteractionPoliciesTests: XCTestCase {
         XCTAssertTrue(retry.succeeded)
         XCTAssertTrue(retry.completion.clearsOwnerDraft)
         XCTAssertTrue(retry.completion.clearsVisibleDraft)
-        XCTAssertTrue(retry.completion.clearsVisibleAttachment)
+        XCTAssertEqual(retry.completion.removedAttachmentURLs, [url])
         XCTAssertFalse(action.isSubmitting)
         XCTAssertEqual(sendInvocations, 2)
     }
@@ -385,31 +491,31 @@ final class InteractionPoliciesTests: XCTestCase {
         let oldCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "old",
-            attachmentURL: oldURL
+            attachmentURLs: [oldURL]
         )
         let old = try XCTUnwrap(oldCandidate)
         _ = tracker.completion(
             for: old,
-            succeeded: false,
+            sentURLs: [],
             ownerDraft: "old",
             visibleChatJID: chat,
             visibleDraft: "old",
-            visibleAttachmentURL: oldURL
+            visibleAttachmentURLs: [oldURL]
         )
         let newCandidate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "new",
-            attachmentURL: newURL
+            attachmentURLs: [newURL]
         )
         let new = try XCTUnwrap(newCandidate)
 
         let stale = tracker.completion(
             for: old,
-            succeeded: true,
+            sentURLs: old.attachmentURLs,
             ownerDraft: "new",
             visibleChatJID: chat,
             visibleDraft: "new",
-            visibleAttachmentURL: newURL
+            visibleAttachmentURLs: [newURL]
         )
 
         XCTAssertFalse(stale.clearsOwnerDraft)
@@ -418,16 +524,16 @@ final class InteractionPoliciesTests: XCTestCase {
         let duplicate: ComposerMediaSendOperation? = tracker.begin(
             chatJID: chat,
             draft: "new",
-            attachmentURL: newURL
+            attachmentURLs: [newURL]
         )
         XCTAssertNil(duplicate)
         _ = tracker.completion(
             for: new,
-            succeeded: false,
+            sentURLs: [],
             ownerDraft: "new",
             visibleChatJID: chat,
             visibleDraft: "new",
-            visibleAttachmentURL: newURL
+            visibleAttachmentURLs: [newURL]
         )
         XCTAssertFalse(tracker.isSubmitting)
     }

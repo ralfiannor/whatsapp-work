@@ -50,6 +50,9 @@ struct MentionTextView: NSViewRepresentable {
     var enterInterceptor: () -> Bool
     var onEnter: () -> Void
     var onFocusChange: (Bool) -> Void
+    /// Files dropped on the field: staged as attachments, never inserted
+    /// as rich-text attachments or path text.
+    var onFileDrop: ([URL]) -> Void
     /// Bump to focus the field (replaces @FocusState bridging).
     var focusRequest: Int
 
@@ -82,6 +85,9 @@ struct MentionTextView: NSViewRepresentable {
         tv.string = text
         tv.onFocus = { [weak coordinator = context.coordinator] focused in
             coordinator?.parent.onFocusChange(focused)
+        }
+        tv.onFileDrop = { [weak coordinator = context.coordinator] urls in
+            coordinator?.parent.onFileDrop(urls)
         }
         Self.recolor(tv, labels: resolvedLabels, font: font)
         context.coordinator.textView = tv
@@ -184,6 +190,36 @@ struct MentionTextView: NSViewRepresentable {
 /// even when focus moves without ending the editing session.
 final class ComposerTextView: NSTextView {
     var onFocus: ((Bool) -> Void)?
+    var onFileDrop: (([URL]) -> Void)?
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + [.fileURL]
+    }
+
+    private static func droppedFileURLs(_ info: NSDraggingInfo) -> [URL] {
+        info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true,
+        ]) as? [URL] ?? []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.droppedFileURLs(sender).isEmpty ? super.draggingEntered(sender) : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.droppedFileURLs(sender).isEmpty ? super.draggingUpdated(sender) : .copy
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        Self.droppedFileURLs(sender).isEmpty ? super.prepareForDragOperation(sender) : true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = Self.droppedFileURLs(sender)
+        guard !urls.isEmpty, let onFileDrop else { return super.performDragOperation(sender) }
+        onFileDrop(urls)
+        return true
+    }
 
     /// ⌘A and ⌘/⌥ Return are handled here because key equivalents dispatch
     /// BEFORE keyDown: the send button owns the ⌘Return key equivalent, so

@@ -764,6 +764,47 @@ final class RuntimePoliciesTests: XCTestCase {
         sidecar.stopBlocking()
     }
 
+    func testSidecarCleanExitNobodyAskedForSurfacesFailureWithoutRespawn() async {
+        let assertions = SleepAssertionProbe()
+        let lifecycle = SidecarLifecycleProbe()
+        let sidecar = makeLifecycleTestSidecar(lifecycle, assertions: assertions)
+        let firstProcess = expectation(description: "first process spawned")
+        let firstTimeout = expectation(description: "first timeout armed")
+        lifecycle.expectProcess(1, firstProcess)
+        lifecycle.expectSchedule(after: 90, count: 1, firstTimeout)
+        sidecar.start()
+        await fulfillment(of: [firstProcess, firstTimeout], timeout: 2)
+
+        // SIGTERM from another copy's orphan reclaim: the core shuts down
+        // cleanly (exit 0) although the app never asked it to.
+        lifecycle.process(at: 0).emitTermination(code: 0)
+        lifecycle.syncManagerQueue()
+        await flushSidecarPublishedState()
+        XCTAssertEqual(sidecar.phase, .failed(CoreError.stoppedOutsideApp.localizedDescription))
+        XCTAssertEqual(lifecycle.processCount, 1, "no auto-restart: it would fight the other copy for the lock")
+
+        // The banner's Restart recovers.
+        let secondProcess = expectation(description: "restart spawns a new core")
+        lifecycle.expectProcess(2, secondProcess)
+        sidecar.restartNow()
+        await fulfillment(of: [secondProcess], timeout: 2)
+
+        // A stop the app asked for stays a quiet idle.
+        sidecar.stop()
+        lifecycle.process(at: 1).emitTermination(code: 0)
+        lifecycle.syncManagerQueue()
+        await flushSidecarPublishedState()
+        XCTAssertEqual(sidecar.phase, .idle)
+        sidecar.stopBlocking()
+    }
+
+    func testUnitTestHostIsDetectedSoTheAppDoesNotBootARealCore() {
+        // This test runs inside the host app, so the live environment must
+        // read as a test host; a normal launch has no XCTest marker.
+        XCTAssertTrue(WhatsAppWorkApp.isUnitTestHost())
+        XCTAssertFalse(WhatsAppWorkApp.isUnitTestHost([:]))
+    }
+
     @MainActor
     func testAppStateRoutesCoreSleepSignalsAndExplicitLogout() async {
         let probe = SleepAssertionProbe()
@@ -3742,14 +3783,14 @@ final class RuntimePoliciesTests: XCTestCase {
                 ownerDraft: state.draftStore[chat],
                 visibleChatJID: state.selectedChat ?? "",
                 visibleDraft: visibleDraft,
-                visibleAttachmentURL: visibleAttachment
+                visibleAttachmentURLs: visibleAttachment.map { [$0] } ?? []
             )
         }
         let firstSend = Task {
             await action.submit(
                 chatJID: chat,
                 draft: caption,
-                attachmentURL: attachment,
+                attachmentURLs: [attachment],
                 caption: caption,
                 send: send,
                 completionState: completionState
@@ -3760,7 +3801,7 @@ final class RuntimePoliciesTests: XCTestCase {
         let duplicate = await action.submit(
             chatJID: chat,
             draft: caption,
-            attachmentURL: attachment,
+            attachmentURLs: [attachment],
             caption: caption,
             send: send,
             completionState: completionState
@@ -3777,7 +3818,7 @@ final class RuntimePoliciesTests: XCTestCase {
         XCTAssertTrue(first.accepted)
         XCTAssertTrue(first.succeeded)
         if first.completion.clearsOwnerDraft { state.draftStore[chat] = "" }
-        XCTAssertTrue(first.completion.clearsVisibleAttachment)
+        XCTAssertEqual(first.completion.removedAttachmentURLs, [attachment])
         if first.completion.clearsVisibleDraft {
             visibleDraft = ""
             visibleAttachment = nil
@@ -3826,7 +3867,7 @@ final class RuntimePoliciesTests: XCTestCase {
             await action.submit(
                 chatJID: chat,
                 draft: caption,
-                attachmentURL: attachment,
+                attachmentURLs: [attachment],
                 caption: caption,
                 send: { request in
                     await state.sendAttachment(
@@ -3840,7 +3881,7 @@ final class RuntimePoliciesTests: XCTestCase {
                         ownerDraft: state.draftStore[chat],
                         visibleChatJID: chat,
                         visibleDraft: caption,
-                        visibleAttachmentURL: attachment
+                        visibleAttachmentURLs: [attachment]
                     )
                 }
             )
@@ -4104,7 +4145,7 @@ final class RuntimePoliciesTests: XCTestCase {
     }
 
     @MainActor
-    func testAttachmentSendPreservesExistingReadErrorMessages() async {
+    func testAttachmentSendReadErrorsNameTheFile() async {
         let endpoints = RuntimeEndpointProbe()
         let client = makeAppRuntimeClient(endpoints)
         let unreadable = AppState(
@@ -4124,15 +4165,43 @@ final class RuntimePoliciesTests: XCTestCase {
             in: "a@s.whatsapp.net"
         )
         XCTAssertFalse(unreadableResult)
-        XCTAssertEqual(unreadable.toast, "Cannot read file")
+        XCTAssertEqual(unreadable.toast, "Cannot read missing.bin")
         let tooLargeResult = await tooLarge.sendAttachment(
             url: URL(fileURLWithPath: "/large.bin"),
             caption: "",
             in: "a@s.whatsapp.net"
         )
         XCTAssertFalse(tooLargeResult)
-        XCTAssertEqual(tooLarge.toast, "File too large (max 20 MB)")
+        XCTAssertEqual(tooLarge.toast, "large.bin is too large (max 20 MB)")
         XCTAssertTrue(endpoints.mediaRequests.isEmpty)
+    }
+
+    /// Reactions and chat toggles used `try?` and vanished on failure; with
+    /// the core down they must say so.
+    @MainActor
+    func testQuickActionsSurfaceFailureWhenCoreIsDown() async {
+        let state = AppState(dockBadgeSink: { _ in })
+
+        await state.react(rowID: 1, emoji: "👍")
+        XCTAssertEqual(state.toast, "Reaction failed: the WhatsApp core is not running")
+
+        await state.setChatStarred("a@s.whatsapp.net", starred: true)
+        XCTAssertEqual(state.toast, "Couldn't star the chat: the WhatsApp core is not running")
+
+        await state.setChatWork("120@g.us", work: false)
+        XCTAssertEqual(state.toast, "Couldn't update work groups: the WhatsApp core is not running")
+    }
+
+    /// The search overlay tells "core can't answer" apart from "no query".
+    @MainActor
+    func testSearchThrowsWhenCoreIsDown() async {
+        let state = AppState(dockBadgeSink: { _ in })
+        do {
+            _ = try await state.runSearch("invoice")
+            XCTFail("search without a core must throw")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "the WhatsApp core is not running")
+        }
     }
 
 }

@@ -7,6 +7,7 @@ struct TranscriptView: View {
     @EnvironmentObject var state: AppState
 
     @State private var nickColWidth: CGFloat = 90
+    @State private var dropTargeted = false
     /// mIRC-style nick panel visibility (groups only), persisted.
     @AppStorage("showMemberPanel") var showMemberPanel = true
     /// Transcript typography (persisted): body size + vertical density.
@@ -40,6 +41,28 @@ struct TranscriptView: View {
                             pageRenderVersion: state.selectedMessagePageRenderVersion)
                 Divider()
                 ComposerBar(chatJID: chatJID)
+            }
+            // Files dragged anywhere over the chat stage as attachments
+            // (the composer field routes its own drops the same way).
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                state.pendingAttachments = files
+                return true
+            } isTargeted: { dropTargeted = $0 }
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.08)))
+                        .overlay(
+                            Text("Drop files to attach")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.accentColor)
+                        )
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
             }
             if isGroup && showMemberPanel {
                 Divider()
@@ -117,6 +140,7 @@ struct TranscriptView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Transcript text size and density")
+        .accessibilityLabel("Text size and density")
     }
 
     private var previewBinding: Binding<Bool> {
@@ -135,12 +159,12 @@ struct TranscriptView: View {
             if isGroup {
                 Text("\(state.chatMembers[chatJID]?.count ?? 0)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 // Raw group identifier: small and tertiary, but selectable so
                 // it can be copied (select + ⌘C) for sharing/invites.
                 Text(chatJID)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
@@ -151,14 +175,14 @@ struct TranscriptView: View {
                 // once the lid map knows it; selectable for copy.
                 Text(chatJID)
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 if let lid = state.lid(forChat: chatJID), lid != chatJID {
                     Text("· \(lid)")
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -175,6 +199,8 @@ struct TranscriptView: View {
                 }
                 .buttonStyle(.plain)
                 .help(showMemberPanel ? "Hide members" : "Show members")
+                .accessibilityLabel("Members panel")
+                .accessibilityValue(showMemberPanel ? "shown" : "hidden")
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -216,7 +242,9 @@ private struct MessageList: View, Equatable {
     @State private var selectedRowID: Int64?
     @State private var snoozeFor: Int64?
     @State private var reactFor: Int64?
+    @State private var scrollBridge = TranscriptScrollBridge()
     @FocusState private var listFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static func == (lhs: MessageList, rhs: MessageList) -> Bool {
         lhs.chatJID == rhs.chatJID && lhs.nickColumn == rhs.nickColumn
@@ -256,7 +284,7 @@ private struct MessageList: View, Equatable {
                             if case let .some(.row(rowID, count)) = unreadMarker,
                                rowID == m.id {
                                 UnreadDivider(count: count) {
-                                    withAnimation(.easeOut(duration: 0.25)) {
+                                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
                                         proxy.scrollTo("bottom", anchor: .bottom)
                                     }
                                 }
@@ -282,8 +310,8 @@ private struct MessageList: View, Equatable {
             // Older-message paging trigger: the List's clip-view offset, not
             // a sentinel row's onAppear (which never fires on macOS).
             .background(
-                TopPagingMonitor {
-                    Task { await automaticTopPaging(proxy) }
+                TopPagingMonitor(chatJID: chatJID, bridge: scrollBridge) {
+                    await automaticTopPaging(proxy)
                 }
             )
             .focused($listFocused)
@@ -297,6 +325,10 @@ private struct MessageList: View, Equatable {
             .onKeyPress("e") { if selectedRowID != nil { reactFor = selectedRowID; snoozeFor = nil }
                 return selectedRowID != nil ? .handled : .ignored }
             .onKeyPress("r") { replyToSelection() }
+            // Open Snooze / React panels answer to the keys they display.
+            .onKeyPress(keys: ["h", "t", "w", "1", "2", "3", "4"]) { press in
+                panelKey(press.characters)
+            }
             .onKeyPress(.escape) {
                 guard selectedRowID != nil || snoozeFor != nil || reactFor != nil else { return .ignored }
                 selectedRowID = nil
@@ -307,16 +339,17 @@ private struct MessageList: View, Equatable {
             .overlay(alignment: .bottom) {
                 if !atBottom && !messages.isEmpty {
                     Button {
-                        withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("bottom", anchor: .bottom) }
                     } label: {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.title2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .background(Circle().fill(.regularMaterial))
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 10)
                     .help("Jump to latest")
+                    .accessibilityLabel("Jump to latest message")
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -336,6 +369,7 @@ private struct MessageList: View, Equatable {
                 }
             }
             .onAppear {
+                showLatestUnlessAnchored(proxy)
                 resolvePendingAnchor(proxy)
                 finishSelectedPageAtViewUpdateProxy()
             }
@@ -353,7 +387,21 @@ private struct MessageList: View, Equatable {
                 selectedRowID = nil
                 snoozeFor = nil
                 reactFor = nil
+                // The list outlives chat switches: reading history in one
+                // chat must not leave the next one parked mid-transcript.
+                showLatestUnlessAnchored(proxy)
             }
+        }
+    }
+
+    /// Opens on the latest messages. `defaultScrollAnchor(.bottom)` does not
+    /// position a macOS 14 List, and the bottom-follow in onChange(of:
+    /// last id) only runs while `atBottom` — stale after a chat switch.
+    private func showLatestUnlessAnchored(_ proxy: ScrollViewProxy) {
+        guard state.pendingAnchor?.chatJID != chatJID else { return }
+        atBottom = true
+        DispatchQueue.main.async {
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
 
@@ -375,6 +423,26 @@ private struct MessageList: View, Equatable {
               let m = messages.first(where: { $0.id == id }) else { return .ignored }
         Task { await action(m) }
         return .handled
+    }
+
+    private func panelKey(_ characters: String) -> KeyPress.Result {
+        if let id = snoozeFor,
+           let option = SnoozePanel.options.first(where: { String($0.key) == characters }) {
+            Task {
+                if await state.snoozeMessage(rowID: id, until: option.until(), label: option.label) {
+                    snoozeFor = nil
+                }
+            }
+            return .handled
+        }
+        if let id = reactFor, let number = Int(characters),
+           ReactionPanel.emojis.indices.contains(number - 1) {
+            let emoji = ReactionPanel.emojis[number - 1]
+            reactFor = nil
+            Task { await state.react(rowID: id, emoji: emoji) }
+            return .handled
+        }
+        return .ignored
     }
 
     private func replyToSelection() -> KeyPress.Result {
@@ -418,7 +486,7 @@ private struct MessageList: View, Equatable {
         // scrollTo from inside a gesture handler needs the next runloop
         // pass — called synchronously the List ignores it.
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
                 proxy.scrollTo(m.id, anchor: .center)
             }
         }
@@ -436,10 +504,12 @@ private struct MessageList: View, Equatable {
         // before it landed) — leave them untouched.
         guard let anchor = state.pendingAnchor, anchor.chatJID == chatJID else { return }
         guard let m = messages.first(where: { $0.message_id == anchor.messageID }) else {
-            let before = messages.count
+            // A page already in flight re-resolves via onChange(of: count);
+            // its busy "false" is not the end of history.
+            guard !loadingOlder else { return }
             Task {
-                await loadOlder()
-                if messages.count == before, state.pendingAnchor == anchor {
+                let loaded = await loadOlder()
+                if !loaded, state.pendingAnchor == anchor {
                     // loadOlder made no progress: end of history, target absent.
                     state.pendingAnchor = nil
                     state.toast = "Message is older than the loaded history — try ⌘K search"
@@ -454,37 +524,40 @@ private struct MessageList: View, Equatable {
         }
     }
 
-    private func loadOlder() async {
+    /// Fetches one older page; true when rows were prepended. With
+    /// `holdingPosition` the probe pins the reader's row while the page lays
+    /// out above it — the hold must start in the same main-actor turn as the
+    /// state merge, before SwiftUI applies it.
+    private func loadOlder(holdingPosition: Bool = false) async -> Bool {
         // A short first page means the whole history is already loaded.
-        guard !loadingOlder, messages.count >= 50 else { return }
+        guard !loadingOlder, messages.count >= 50 else { return false }
         loadingOlder = true
-        await state.loadOlderMessages(for: chatJID)
+        let loaded = await state.loadOlderMessages(for: chatJID)
+        if loaded && holdingPosition { scrollBridge.holdPositionForPrepend() }
         loadingOlder = false
+        return loaded
     }
 
     /// Scroll-driven paging entry: one shared decision for every automatic
     /// trigger. The visible Load Earlier divider stays for explicit paging
     /// and as the unread-count affordance.
-    private func automaticTopPaging(_ proxy: ScrollViewProxy) async {
+    private func automaticTopPaging(_ proxy: ScrollViewProxy) async -> Bool {
         guard AutomaticTopPagingDecision.shouldLoad(
             jumping: jumping,
             loadingOlder: loadingOlder,
             messageCount: messages.count
-        ) else { return }
-        await loadOlderAnchored(proxy)
+        ) else { return false }
+        return await loadOlderAnchored(proxy)
     }
 
-    /// Paging for manual scroll-up. After a successful prepend the
-    /// TopPagingMonitor probe shifts the clip view to the equivalent offset
-    /// (the row the reader was on stays visually fixed), leaving offset room
-    /// for the next reach-top to fire — `proxy.scrollTo` here was unreliable
-    /// (silently dropped) and left the offset pinned at the top.
-    private func loadOlderAnchored(_ proxy: ScrollViewProxy) async {
-        let before = messages.count
-        await loadOlder()
-        let after = state.messagesByChat[chatJID]?.count ?? before
-        guard after > before else { return }
-        resolvePendingAnchor(proxy)
+    /// Paging for manual scroll-up and Load Earlier: the reader's row stays
+    /// visually fixed while older rows land above it, leaving offset room
+    /// for the next reach-top to fire.
+    @discardableResult
+    private func loadOlderAnchored(_ proxy: ScrollViewProxy) async -> Bool {
+        let loaded = await loadOlder(holdingPosition: true)
+        if loaded { resolvePendingAnchor(proxy) }
+        return loaded
     }
 }
 
@@ -509,7 +582,7 @@ struct DateDivider: View {
     var body: some View {
         Text(label)
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .accessibilityAddTraits(.isHeader)
@@ -577,61 +650,90 @@ struct SnoozePanel: View {
     let onDismiss: () -> Void
     @EnvironmentObject var state: AppState
 
+    /// Shared with MessageList's key handling: the letter shown is the
+    /// letter that works. Deadlines are computed when chosen, not when the
+    /// panel opened.
+    struct Option {
+        let title: String
+        let key: Character
+        /// Toast wording, matching the transcript context menu.
+        let label: String
+        let until: @MainActor () -> Int64
+    }
+
+    static let options: [Option] = [
+        Option(title: "In 1 hour", key: "h", label: "1 hour", until: { AppState.snoozeOneHour }),
+        Option(title: "Tomorrow 9am", key: "t", label: "tomorrow 9am", until: { AppState.nextMorning() }),
+        Option(title: "Next week", key: "w", label: "next week", until: { AppState.snoozeNextWeek() }),
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("SNOOZE")
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 8).padding(.top, 6)
-            option("Later today", "H", until: AppState.snoozeOneHour)
-            option("Tomorrow 9am", "T", until: AppState.nextMorning())
-            option("Next week", "W", until: AppState.snoozeNextWeek())
+                .accessibilityAddTraits(.isHeader)
+            ForEach(Self.options, id: \.key) { option($0) }
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(.regularMaterial)
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary)))
         .frame(width: 150)
     }
 
-    private func option(_ title: String, _ key: String, until: Int64) -> some View {
+    private func option(_ option: Option) -> some View {
         Button {
             Task {
-                if await state.snoozeMessage(rowID: rowID, until: until, label: title.lowercased()) {
+                if await state.snoozeMessage(rowID: rowID, until: option.until(), label: option.label) {
                     onDismiss()
                 }
             }
         } label: {
             HStack {
-                Text(title).font(.system(size: 11.5, design: .monospaced))
+                Text(option.title).font(.system(size: 11.5, design: .monospaced))
                 Spacer()
-                Text(key).font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text(String(option.key).uppercased())
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Snooze \(option.label)")
     }
 }
 
-/// Reaction picker for the selected row (E key).
+/// Reaction picker for the selected row (E key); 1–4 pick by keyboard.
 struct ReactionPanel: View {
     let rowID: Int64
     let onDismiss: () -> Void
     @EnvironmentObject var state: AppState
 
+    /// Quick reactions — shared with the row context menu and MessageList's
+    /// number-key handling.
+    static let emojis = ["👍", "❤️", "😂", "✅"]
+
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(["👍", "❤️", "😂", "✅"], id: \.self) { emoji in
+            ForEach(Array(Self.emojis.enumerated()), id: \.element) { index, emoji in
                 Button {
                     Task {
-                        try? await state.apiClient?.react(rowID: rowID, emoji: emoji)
+                        await state.react(rowID: rowID, emoji: emoji)
                         onDismiss()
                     }
                 } label: {
-                    Text(emoji)
-                        .font(.system(size: 16))
-                        .padding(.horizontal, 6).padding(.vertical, 4)
-                        .contentShape(Rectangle())
+                    VStack(spacing: 0) {
+                        Text(emoji)
+                            .font(.system(size: 16))
+                        Text("\(index + 1)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -652,9 +754,10 @@ struct ComposerBar: View {
     @EnvironmentObject var state: AppState
     @State private var draft = ""
     @State private var fieldFocused = false
-    /// Picked-but-not-sent file. Two-step attach: paperclip only picks,
-    /// the user types a caption, Enter / send ships them together.
-    @State private var attachmentURL: URL?
+    /// Picked-but-not-sent files. Two-step attach: paperclip, paste and
+    /// drop only stage; the user types a caption, Enter / send ships them
+    /// together (the caption rides on the first file).
+    @State private var attachments: [URL] = []
     @StateObject private var mediaSubmitAction = ComposerMediaSubmitAction()
     @State private var mentionMembers: [APIClient.GroupMember] = []
     @State private var mentionPrefix = ""
@@ -682,7 +785,7 @@ struct ComposerBar: View {
     var body: some View {
         VStack(spacing: 6) {
             replyBanner
-            attachmentBanner
+            attachmentStrip
             inputRow
         }
         .padding(10)
@@ -713,10 +816,10 @@ struct ComposerBar: View {
                 Task { await state.commitRead(chatJID, source: .composerFocus) }
             }
         }
-        .onChange(of: state.pendingPasteImage) { _, url in
-            guard let url else { return }
-            attach(url: url)
-            state.pendingPasteImage = nil
+        .onChange(of: state.pendingAttachments) { _, urls in
+            guard !urls.isEmpty else { return }
+            attach(urls)
+            state.pendingAttachments = []
         }
         .onChange(of: state.pendingMentionInsert) { _, label in
             guard let label else { return }
@@ -726,7 +829,7 @@ struct ComposerBar: View {
         }
         .onChange(of: chatJID) { _, newChat in
             draft = state.draftStore[newChat] ?? ""
-            attachmentURL = nil // a picked image belongs to the chat it was picked in
+            attachments = [] // staged files belong to the chat they were picked in
             mentionActive = false
             mentionPrefix = ""
             // Roster MUST follow the chat: mentionMembers is @State fetched
@@ -751,9 +854,11 @@ struct ComposerBar: View {
                 Button {
                     state.clearReply(for: chatJID)
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Cancel reply")
+                .accessibilityLabel("Cancel reply")
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.35)))
@@ -771,28 +876,48 @@ struct ComposerBar: View {
         }
     }
 
-    /// Picked image waiting to be sent: file name + remove, same quiet chip
-    /// style as the reply banner. File metadata belongs to the async loader.
+    /// Staged files waiting to be sent: one chip per file (thumbnail for
+    /// images) in the reply banner's quiet style. Chips lock while a send is
+    /// in flight — the batch was captured when it started.
     @ViewBuilder
-    private var attachmentBanner: some View {
-        if let url = attachmentURL {
-            HStack(spacing: 8) {
-                Image(systemName: Self.attachIcon(for: url)).foregroundStyle(.secondary)
-                Text(url.lastPathComponent)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    removeAttachment()
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+    private var attachmentStrip: some View {
+        if !attachments.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                if attachments.count > 1 {
+                    HStack(spacing: 8) {
+                        Text(attachmentStatus)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if !mediaSubmitAction.isSubmitting {
+                            Button("Remove all") { removeAllAttachments() }
+                                .font(.system(size: 10, design: .monospaced))
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Remove attachment")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachments, id: \.self) { url in
+                            AttachmentChip(url: url, removable: !mediaSubmitAction.isSubmitting) {
+                                removeAttachment(url)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 30)
             }
             .padding(.horizontal, 12).padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.35)))
         }
+    }
+
+    private var attachmentStatus: String {
+        if mediaSubmitAction.isSubmitting {
+            return "Sending \(mediaSubmitAction.sendingIndex) of \(mediaSubmitAction.sendingTotal)…"
+        }
+        return "\(attachments.count) files — the message goes as the first file's caption"
     }
 
     private var inputRow: some View {
@@ -800,17 +925,20 @@ struct ComposerBar: View {
             if mediaSubmitAction.isSubmitting || state.sendingMedia {
                 ProgressView().controlSize(.small).padding(.bottom, 10)
             }
-            Button(action: pickFile) {
+            Button(action: pickFiles) {
                 Image(systemName: "paperclip")
             }
             .buttonStyle(.plain)
-            .help("Attach file — pick now, type a caption, send together")
+            .help("Attach files (or paste / drop them) — type a caption, send together")
+            .accessibilityLabel("Attach files")
             .padding(.bottom, 6)
             inputField
             Button(action: { Task { await submit() } }) {
                 Image(systemName: "paperplane.fill")
             }
             .disabled(!canSend)
+            .help("Send (Return)")
+            .accessibilityLabel("Send")
             .keyboardShortcut(.return, modifiers: .command)
             .padding(.bottom, 8)
         }
@@ -819,34 +947,60 @@ struct ComposerBar: View {
     private var canSend: Bool {
         mediaSubmitAction.isSubmitting == false &&
             state.sendingMedia == false &&
-            (attachmentURL != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            (!attachments.isEmpty || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
-    /// Two-step attach: the panel only PICKS (any file — documents, video,
-    /// audio, images; the core maps the MIME to the right WhatsApp kind).
+    /// Two-step attach: the panel only PICKS (any files — documents, video,
+    /// audio, images; the core maps each MIME to the right WhatsApp kind).
     /// Caption is typed afterwards in the normal composer; Enter (or the
-    /// plane) ships file + text together.
-    private func pickFile() {
+    /// plane) ships files + text together.
+    private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        attach(url: url)
+        guard panel.runModal() == .OK else { return }
+        attach(panel.urls)
     }
 
-    /// Shared attach path for picker and clipboard paste: stage the file and
-    /// drop the caret into the caption field. Bumping the focus request
-    /// (instead of setting fieldFocused directly) is what actually focuses
-    /// the NSTextView via MentionTextView's focusRequest.
-    private func attach(url: URL) {
+    /// Shared attach path for picker, clipboard paste and drops: stage the
+    /// files (deduplicated, folders skipped, capped per send) and drop the
+    /// caret into the caption field. Bumping the focus request (instead of
+    /// setting fieldFocused directly) is what actually focuses the
+    /// NSTextView via MentionTextView's focusRequest.
+    private func attach(_ urls: [URL]) {
+        guard !mediaSubmitAction.isSubmitting else {
+            state.toast = "Wait for the current files to finish sending"
+            return
+        }
+        let files = urls.filter {
+            $0.isFileURL && (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+        }
+        guard !files.isEmpty else {
+            state.toast = "Folders can't be sent — pick the files inside"
+            return
+        }
+        var staged = attachments
+        for url in files where !staged.contains(url) {
+            guard staged.count < AppState.maxAttachmentsPerSend else {
+                state.toast = "Up to \(AppState.maxAttachmentsPerSend) files per send"
+                break
+            }
+            staged.append(url)
+        }
+        guard staged != attachments else { return }
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
-        attachmentURL = url
+        attachments = staged
         state.composerFocusRequest += 1
     }
 
-    private func removeAttachment() {
+    private func removeAttachment(_ url: URL) {
         mediaSubmitAction.noteCompositionChanged(for: chatJID)
-        attachmentURL = nil
+        attachments.removeAll { $0 == url }
+    }
+
+    private func removeAllAttachments() {
+        mediaSubmitAction.noteCompositionChanged(for: chatJID)
+        attachments = []
     }
 
     private var inputField: some View {
@@ -869,6 +1023,7 @@ struct ComposerBar: View {
                     },
                     onEnter: { submitFromKeyboard() },
                     onFocusChange: { fieldFocused = $0 },
+                    onFileDrop: { attach($0) },
                     focusRequest: state.composerFocusRequest
                 )
                 // Placeholder: an NSTextView has none of its own. Offsets
@@ -987,13 +1142,13 @@ struct ComposerBar: View {
     private func submit() async {
         guard !mediaSubmitAction.isSubmitting else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Attachment flow: image + caption (draft) leave together.
-        if let url = attachmentURL {
+        // Attachment flow: files + caption (draft) leave together.
+        if !attachments.isEmpty {
             let ownerChatJID = chatJID
             let outcome = await mediaSubmitAction.submit(
                 chatJID: ownerChatJID,
                 draft: draft,
-                attachmentURL: url,
+                attachmentURLs: attachments,
                 caption: text,
                 send: { request in
                     await state.sendAttachment(
@@ -1007,7 +1162,7 @@ struct ComposerBar: View {
                         ownerDraft: state.draftStore[ownerChatJID],
                         visibleChatJID: state.selectedChat ?? "",
                         visibleDraft: draft,
-                        visibleAttachmentURL: attachmentURL
+                        visibleAttachmentURLs: attachments
                     )
                 }
             )
@@ -1018,8 +1173,9 @@ struct ComposerBar: View {
                 draft = ""
                 mentionActive = false
             }
-            if outcome.completion.clearsVisibleAttachment {
-                attachmentURL = nil
+            let sent = outcome.completion.removedAttachmentURLs
+            if !sent.isEmpty {
+                attachments.removeAll { sent.contains($0) }
             }
             return
         }
@@ -1030,6 +1186,52 @@ struct ComposerBar: View {
             await state.sendReply(text, in: chatJID)
         } else {
             await state.send(text, in: chatJID)
+        }
+    }
+}
+
+/// One staged file in the composer strip: image thumbnail (ImageIO
+/// downsample in a detached task, never full pixels) or a kind icon, the
+/// file name, and a remove button.
+private struct AttachmentChip: View {
+    let url: URL
+    let removable: Bool
+    let onRemove: () -> Void
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Group {
+                if let thumbnail {
+                    Image(nsImage: thumbnail).resizable().scaledToFill()
+                } else {
+                    Image(systemName: ComposerBar.attachIcon(for: url)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 24, height: 24)
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+            Text(url.lastPathComponent)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 160, alignment: .leading)
+            if removable {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove \(url.lastPathComponent)")
+                .accessibilityLabel("Remove \(url.lastPathComponent)")
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary.opacity(0.5)))
+        .task(id: url) {
+            guard AppState.mime(forExtension: url.pathExtension).hasPrefix("image/") else { return }
+            let decoded = await Task.detached(priority: .utility) {
+                AppState.downsampledImage(url: url, maxPixel: 64)
+            }.value
+            thumbnail = decoded?.image
         }
     }
 }
@@ -1180,8 +1382,7 @@ struct MessageBubble: View {
                                 || (ownLID != nil && $0.reactor_jid == ownLID)
                         }
                         Task {
-                            try? await state.apiClient?.react(rowID: message.id,
-                                                              emoji: mine ? "" : g.emoji)
+                            await state.react(rowID: message.id, emoji: mine ? "" : g.emoji)
                         }
                     } label: {
                         Text("\(g.emoji) \(g.users.count)")
@@ -1257,8 +1458,8 @@ struct MessageBubble: View {
                 }
             }
             Divider()
-            ForEach(["👍", "❤️", "😂", "✅"], id: \.self) { emoji in
-                Button(emoji) { Task { try? await state.apiClient?.react(rowID: message.id, emoji: emoji) } }
+            ForEach(ReactionPanel.emojis, id: \.self) { emoji in
+                Button(emoji) { Task { await state.react(rowID: message.id, emoji: emoji) } }
             }
             Divider()
             Button(message.done == true ? "Mark Not Done" : "✓ Done") {
@@ -1530,10 +1731,11 @@ struct ProfileView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .help("Back to members")
+                .accessibilityLabel("Close profile")
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
 
@@ -1678,7 +1880,7 @@ struct ProfileView: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title.uppercased())
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(size: 11, design: .monospaced))
                 .textSelection(.enabled)
@@ -1710,6 +1912,7 @@ struct ImagePreviewSheet: View {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .help("Save image to disk")
+                    .accessibilityLabel("Save image")
                     Button("Close") { state.previewImage = nil }
                         .keyboardShortcut(.cancelAction)
                 }
