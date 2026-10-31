@@ -31,9 +31,9 @@ func seedMediaMessage(t *testing.T, st *storage.Store, id string) core.Message {
 			URL: "u", DirectPath: "/p", Proto: []byte("proto-blob-" + id),
 		},
 	}
-	isNew, err := st.InsertMessage(ctx, &m)
-	if err != nil || !isNew {
-		t.Fatalf("seed: isNew=%v err=%v", isNew, err)
+	outcome, err := st.InsertMessage(ctx, &m)
+	if err != nil || outcome != storage.InsertNew {
+		t.Fatalf("seed: outcome=%v err=%v", outcome, err)
 	}
 	return m
 }

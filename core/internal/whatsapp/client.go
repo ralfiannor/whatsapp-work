@@ -146,6 +146,14 @@ func New(ctx context.Context, dataDir string, lg *slog.Logger) (*Client, error) 
 	// contact list — so the contact names WhatsApp Web shows never reached
 	// the app.
 	cli.EmitAppStateEventsOnFullSync = true
+	// A message we cannot decrypt (usually a group sender key that never
+	// reached this device) gets a retry receipt asking the SENDER's device to
+	// re-send it. When that device stays silent the message is lost for good
+	// — most decrypt failures end that way. WhatsApp Web also asks the
+	// account's own phone, which holds the decrypted copy; whatsmeow only
+	// does that (5 s after the retry receipt, cancelled if the sender's copy
+	// lands first) with this flag on. Off by default.
+	cli.AutomaticMessageRerequestFromPhone = true
 	c := &Client{
 		cli:    cli,
 		dev:    dev,
@@ -843,8 +851,12 @@ func (c *Client) onEvent(raw any) {
 		c.log.Error("whatsapp: pair error", "err", evt.Error)
 
 	case *events.Message:
+		// The phone's answer to a re-request (UnavailableRequestID) is parsed
+		// from a WebMessageInfo like a history record, but it is a live
+		// message that failed to decrypt on arrival: it must count as unread
+		// and reach the inbox like any other.
 		source := "live"
-		if evt.SourceWebMsg != nil {
+		if evt.SourceWebMsg != nil && evt.UnavailableRequestID == "" {
 			source = "history"
 		}
 		inc, err := Normalize(c.ownJIDsCopy(), evt, source, c.ResolveLIDs(nil))
@@ -903,9 +915,14 @@ func (c *Client) onEvent(raw any) {
 		c.onHistorySync(evt)
 
 	case *events.UndecryptableMessage:
-		// whatsmeow requests a resend automatically.
+		// whatsmeow asks the sender to re-send, then our own phone
+		// (AutomaticMessageRerequestFromPhone); either copy arrives as a
+		// normal *events.Message and upgrades this placeholder in place.
 		c.log.Warn("whatsapp: undecryptable message",
 			"chat", evt.Info.Chat.String(), "id", evt.Info.ID)
+		if inc := NormalizeUndecryptable(evt, c.ResolveLIDs(nil)); inc.Kind != core.IncomingIgnore {
+			c.emit(core.EventMessage{Incoming: inc, Source: inc.Message.Source})
+		}
 	}
 }
 

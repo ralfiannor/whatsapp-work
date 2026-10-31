@@ -25,43 +25,11 @@ func Normalize(myJIDs []string, evt *events.Message, source string, lidToPN map[
 	if evt == nil || evt.Message == nil || evt.Info.ID == "" {
 		return ignore, nil
 	}
-	sender := canonicalSender(evt, lidToPN)
-	chat := canonicalChat(evt, sender, lidToPN)
-	myJIDs = withOwnLIDs(myJIDs, lidToPN)
-
-	switch chat.Server {
-	case types.DefaultUserServer, types.HiddenUserServer, types.GroupServer:
-		// ok
-	default:
-		return ignore, nil // newsletter, broadcast/status, call, … (non-goals)
-	}
-	// A JID with an empty user part passes whatsmeow's IsEmpty (it only
-	// checks the server) — ingesting it creates junk chat/sender rows keyed
-	// by the bare server string.
-	if chat.User == "" || sender.User == "" {
+	m, ok := envelope(&evt.Info, source, lidToPN)
+	if !ok {
 		return ignore, nil
 	}
-
-	// Sender-stamped envelope timestamps are remote input: a far-future
-	// stamp poisons last_read_ts permanently (every honest message after it
-	// is born read and the recompute cannot heal it) and pins the chat to
-	// the top of the list; a zero stamp lands at unix-epoch-minus-one in
-	// Unix() and breaks keyset cursors. Clamp to a sane window.
-	ts := evt.Info.Timestamp.Unix()
-	if ts < minSaneTS {
-		ts = minSaneTS
-	} else if ts > maxSaneTS {
-		ts = maxSaneTS
-	}
-
-	m := core.Message{
-		MessageID: truncateRunes(evt.Info.ID, 128),
-		ChatJID:   chat.String(),
-		SenderJID: sender.ToNonAD().String(),
-		FromMe:    evt.Info.IsFromMe,
-		Timestamp: ts,
-		Source:    source,
-	}
+	myJIDs = withOwnLIDs(myJIDs, lidToPN)
 	msg := evt.Message
 
 	// Control-plane messages first.
@@ -234,6 +202,70 @@ func Normalize(myJIDs []string, evt *events.Message, source string, lidToPN map[
 	return core.Incoming{Kind: core.IncomingNew, Message: m}, nil
 }
 
+// NormalizeUndecryptable turns a message that failed to decrypt into a
+// placeholder row, so the gap shows in the transcript instead of vanishing.
+// The re-sent copy (sender retry or the account's own phone) carries the
+// same chat/sender/id and upgrades the row in place. Senders flag failures
+// that must stay invisible (reactions, poll votes, …) with DecryptFailHide.
+func NormalizeUndecryptable(evt *events.UndecryptableMessage, lidToPN map[string]string) core.Incoming {
+	ignore := core.Incoming{Kind: core.IncomingIgnore}
+	if evt == nil || evt.Info.ID == "" || evt.DecryptFailMode == events.DecryptFailHide {
+		return ignore
+	}
+	m, ok := envelope(&evt.Info, "live", lidToPN)
+	if !ok {
+		return ignore
+	}
+	m.Kind, m.RawKind = core.KindUnsupported, core.RawKindPending
+	if evt.UnavailableType == events.UnavailableTypeViewOnce {
+		m.RawKind = core.RawKindViewOnce
+	}
+	return core.Incoming{Kind: core.IncomingNew, Message: m}
+}
+
+// envelope builds the addressing half of a stored message — canonical chat
+// and sender, clamped timestamp — for decrypted messages and placeholders
+// alike, so both land on the same (chat, sender, message_id) key. ok=false
+// means the chat is out of scope.
+func envelope(info *types.MessageInfo, source string, lidToPN map[string]string) (core.Message, bool) {
+	sender := canonicalSender(info, lidToPN)
+	chat := canonicalChat(info, sender, lidToPN)
+
+	switch chat.Server {
+	case types.DefaultUserServer, types.HiddenUserServer, types.GroupServer:
+		// ok
+	default:
+		return core.Message{}, false // newsletter, broadcast/status, call, … (non-goals)
+	}
+	// A JID with an empty user part passes whatsmeow's IsEmpty (it only
+	// checks the server) — ingesting it creates junk chat/sender rows keyed
+	// by the bare server string.
+	if chat.User == "" || sender.User == "" {
+		return core.Message{}, false
+	}
+
+	// Sender-stamped envelope timestamps are remote input: a far-future
+	// stamp poisons last_read_ts permanently (every honest message after it
+	// is born read and the recompute cannot heal it) and pins the chat to
+	// the top of the list; a zero stamp lands at unix-epoch-minus-one in
+	// Unix() and breaks keyset cursors. Clamp to a sane window.
+	ts := info.Timestamp.Unix()
+	if ts < minSaneTS {
+		ts = minSaneTS
+	} else if ts > maxSaneTS {
+		ts = maxSaneTS
+	}
+
+	return core.Message{
+		MessageID: truncateRunes(info.ID, 128),
+		ChatJID:   chat.String(),
+		SenderJID: sender.ToNonAD().String(),
+		FromMe:    info.IsFromMe,
+		Timestamp: ts,
+		Source:    source,
+	}, true
+}
+
 // withOwnLIDs adds the LID twin of each own phone JID known to the lid→pn
 // map. whatsmeow persists Device.LID at pair/connect, so the stored list
 // normally covers both forms — but a session whose stored LID is empty (lost
@@ -261,12 +293,12 @@ func withOwnLIDs(myJIDs []string, lidToPN map[string]string) []string {
 // canonicalSender resolves a message sender to its phone-number JID:
 // prefer the per-message SenderAlt (LID migrations carry both forms), fall
 // back to the learned lid→pn table. Returns the chat JID when absent.
-func canonicalSender(evt *events.Message, lidToPN map[string]string) types.JID {
-	sender := evt.Info.Sender
+func canonicalSender(info *types.MessageInfo, lidToPN map[string]string) types.JID {
+	sender := info.Sender
 	if sender.IsEmpty() {
-		return evt.Info.Chat
+		return info.Chat
 	}
-	if alt := evt.Info.SenderAlt; !alt.IsEmpty() && alt.Server == types.DefaultUserServer {
+	if alt := info.SenderAlt; !alt.IsEmpty() && alt.Server == types.DefaultUserServer {
 		return alt.ToNonAD()
 	}
 	if sender.Server == types.HiddenUserServer {
@@ -286,12 +318,12 @@ func canonicalSender(evt *events.Message, lidToPN map[string]string) types.JID {
 // peer themselves, so the already-canonical sender names the phone thread;
 // from-me echoes and unmapped LIDs fall back to the learned table. Groups
 // and unmapped LIDs pass through unchanged — never guess a phone JID.
-func canonicalChat(evt *events.Message, sender types.JID, lidToPN map[string]string) types.JID {
-	chat := evt.Info.Chat
+func canonicalChat(info *types.MessageInfo, sender types.JID, lidToPN map[string]string) types.JID {
+	chat := info.Chat
 	if chat.Server != types.HiddenUserServer {
 		return chat
 	}
-	if !evt.Info.IsFromMe && sender.Server == types.DefaultUserServer {
+	if !info.IsFromMe && sender.Server == types.DefaultUserServer {
 		return sender
 	}
 	if pn, ok := lidToPN[chat.ToNonAD().String()]; ok && pn != "" {

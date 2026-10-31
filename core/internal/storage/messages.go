@@ -25,31 +25,43 @@ const localStateJoin = ` LEFT JOIN local_message_state ls ON ls.message_id = m.i
 const mediaCols = `md.id, md.kind, md.mime, md.size, md.filename, md.width, md.height, md.duration_ms,
 	md.state, md.local_path`
 
+// InsertOutcome reports what InsertMessage did with one delivery.
+type InsertOutcome int
+
+const (
+	// InsertDuplicate: the row already existed; nothing visible changed.
+	InsertDuplicate InsertOutcome = iota
+	// InsertNew: a new row.
+	InsertNew
+	// InsertUpgraded: an existing row gained content from a re-delivery —
+	// typically a decrypt-failure placeholder receiving its message.
+	InsertUpgraded
+)
+
 // InsertMessage inserts one message idempotently (UNIQUE chat+sender+message_id)
 // and updates chat counters, preview, and the media row in one transaction.
 //
 // Counter rules (docs/schema.md): only live-source incoming messages newer
 // than the chat's read position bump unread counts; history backfill never
-// marks anything unread. Returns whether the row was newly inserted; m.ID is
-// filled either way.
-func (s *Store) InsertMessage(ctx context.Context, m *core.Message) (isNew bool, err error) {
+// marks anything unread. m.ID is filled whatever the outcome.
+func (s *Store) InsertMessage(ctx context.Context, m *core.Message) (outcome InsertOutcome, err error) {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("storage: insert begin: %w", err)
+		return InsertDuplicate, fmt.Errorf("storage: insert begin: %w", err)
 	}
 	defer func() {
 		if err != nil {
 			_ = tx.Rollback()
 		}
 	}()
-	isNew, err = s.insertMessageTx(ctx, tx, m)
+	outcome, err = s.insertMessageTx(ctx, tx, m)
 	if err != nil {
-		return false, err
+		return InsertDuplicate, err
 	}
 	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("storage: insert commit: %w", err)
+		return InsertDuplicate, fmt.Errorf("storage: insert commit: %w", err)
 	}
-	return isNew, nil
+	return outcome, nil
 }
 
 // InsertMessages ingests a history batch inside shared transactions, one per
@@ -69,12 +81,12 @@ func (s *Store) InsertMessages(ctx context.Context, msgs []core.Message) (insert
 		}
 		chunkInserted := 0
 		for i := range chunk {
-			isNew, insErr := s.insertMessageTx(ctx, tx, &chunk[i])
+			outcome, insErr := s.insertMessageTx(ctx, tx, &chunk[i])
 			if insErr != nil {
 				_ = tx.Rollback()
 				return inserted, insErr
 			}
-			if isNew {
+			if outcome == InsertNew {
 				chunkInserted++
 			}
 		}
@@ -87,7 +99,7 @@ func (s *Store) InsertMessages(ctx context.Context, msgs []core.Message) (insert
 }
 
 // insertMessageTx does the per-message work inside a caller-owned tx.
-func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message) (isNew bool, err error) {
+func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message) (outcome InsertOutcome, err error) {
 	if m.SenderJID == "" {
 		m.SenderJID = m.ChatJID
 	}
@@ -111,53 +123,19 @@ func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message
 		m.ReplyToID, m.ReplyToSender, m.QuotedText, m.HasMention, string(mentioned),
 		m.ReceiptStatus, m.Source, m.Revoked, m.Forwarded, m.CreatedAt, m.UpdatedAt)
 	if err != nil {
-		return false, fmt.Errorf("storage: insert message %s: %w", m.MessageID, err)
+		return InsertDuplicate, fmt.Errorf("storage: insert message %s: %w", m.MessageID, err)
 	}
 
 	if n, _ := res.RowsAffected(); n == 1 {
-		isNew = true
+		outcome = InsertNew
 		if m.ID, err = res.LastInsertId(); err != nil {
-			return false, fmt.Errorf("storage: message rowid: %w", err)
+			return InsertDuplicate, fmt.Errorf("storage: message rowid: %w", err)
 		}
-	} else {
-		if err = tx.QueryRowContext(ctx, `
-			SELECT id FROM messages WHERE chat_jid = ? AND sender_jid = ? AND message_id = ?`,
-			m.ChatJID, m.SenderJID, m.MessageID).Scan(&m.ID); err != nil {
-			return false, fmt.Errorf("storage: existing message rowid: %w", err)
-		}
-		// A re-delivery may carry richer content than the first attempt
-		// (e.g. retry after an encryption-envelope-only skdm message): refresh
-		// text, and escalate an "unsupported" row to the real kind — never
-		// downgrade a classified row. Mention/reply/forwarded metadata follows
-		// the same escalate-only rule: a full re-delivery carries the real
-		// ContextInfo, and dropping it here left mention-flagged content
-		// permanently invisible to the Mentions filter and the inbox.
-		if m.Text != "" || m.Kind != core.KindUnsupported || m.HasMention || m.ReplyToID != "" {
-			if _, err = tx.ExecContext(ctx, `
-				UPDATE messages SET
-					text = CASE WHEN ? != '' THEN ? ELSE text END,
-					kind = CASE WHEN kind = 'unsupported' AND ? != 'unsupported' THEN ? ELSE kind END,
-					raw_kind = CASE WHEN ? != 'unsupported' THEN '' ELSE raw_kind END,
-					has_mention = CASE WHEN ? != 0 THEN 1 ELSE has_mention END,
-					mentioned_jids = CASE WHEN ? != '[]' THEN ? ELSE mentioned_jids END,
-					reply_to_id = CASE WHEN ? != '' THEN ? ELSE reply_to_id END,
-					reply_to_sender = CASE WHEN ? != '' THEN ? ELSE reply_to_sender END,
-					quoted_text = CASE WHEN ? != '' THEN ? ELSE quoted_text END,
-					forwarded = CASE WHEN ? != 0 THEN 1 ELSE forwarded END,
-					updated_at = ?
-				WHERE id = ?`,
-				m.Text, m.Text, string(m.Kind), string(m.Kind), string(m.Kind),
-				m.HasMention, string(mentioned), string(mentioned),
-				m.ReplyToID, m.ReplyToID,
-				m.ReplyToSender, m.ReplyToSender,
-				m.QuotedText, m.QuotedText,
-				m.Forwarded, m.UpdatedAt, m.ID); err != nil {
-				return false, fmt.Errorf("storage: update message content: %w", err)
-			}
-		}
+	} else if outcome, err = redeliverTx(ctx, tx, m, string(mentioned)); err != nil {
+		return InsertDuplicate, err
 	}
 
-	if isNew {
+	if outcome == InsertNew {
 		if m.Source == "live" && !m.FromMe {
 			mention := 0
 			if m.HasMention {
@@ -169,7 +147,7 @@ func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message
 					mentioned_unread = mentioned_unread + ?
 				WHERE jid = ? AND ? > last_read_ts`,
 				mention, m.ChatJID, m.Timestamp); err != nil {
-				return false, fmt.Errorf("storage: bump unread: %w", err)
+				return InsertDuplicate, fmt.Errorf("storage: bump unread: %w", err)
 			}
 			// The inbox reads pending items from local_message_state — a
 			// live incoming row must exist there from birth (done=0).
@@ -177,7 +155,7 @@ func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message
 				INSERT INTO local_message_state (message_id, done, snoozed_until, starred, priority)
 				VALUES (?, 0, NULL, 0, 0)
 				ON CONFLICT (message_id) DO NOTHING`, m.ID); err != nil {
-				return false, fmt.Errorf("storage: inbox state row: %w", err)
+				return InsertDuplicate, fmt.Errorf("storage: inbox state row: %w", err)
 			}
 		}
 		if _, err = tx.ExecContext(ctx, `
@@ -185,16 +163,104 @@ func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message
 				last_message_ts = ?, last_message_id = ?, last_preview = ?, updated_at = ?
 			WHERE jid = ? AND (last_message_ts IS NULL OR last_message_ts <= ?)`,
 			m.Timestamp, m.MessageID, previewOf(m), m.UpdatedAt, m.ChatJID, m.Timestamp); err != nil {
-			return false, fmt.Errorf("storage: advance preview: %w", err)
+			return InsertDuplicate, fmt.Errorf("storage: advance preview: %w", err)
 		}
 	}
 
 	if m.Media != nil {
 		if err = insertMedia(ctx, tx, m.ID, m.Media); err != nil {
-			return false, err
+			return InsertDuplicate, err
 		}
 	}
-	return isNew, nil
+	return outcome, nil
+}
+
+// redeliverTx merges a re-delivery into the existing row (m.ID is filled).
+// A re-delivery may carry richer content than the first attempt (the copy
+// behind a decrypt-failure placeholder, or a retry after an
+// encryption-envelope-only skdm message): refresh text, and escalate the kind
+// — never downgrade a classified row. Mention/reply/forwarded metadata
+// follows the same escalate-only rule: a full re-delivery carries the real
+// ContextInfo, and dropping it here left mention-flagged content permanently
+// invisible to the Mentions filter and the inbox. A revoked row stays
+// deleted: re-adding its text would resurface it in search.
+func redeliverTx(ctx context.Context, tx *sql.Tx, m *core.Message, mentioned string) (InsertOutcome, error) {
+	var prevKind, prevRaw, prevText string
+	var prevMention, prevRevoked int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id, kind, raw_kind, text, has_mention, revoked FROM messages
+		WHERE chat_jid = ? AND sender_jid = ? AND message_id = ?`,
+		m.ChatJID, m.SenderJID, m.MessageID).Scan(&m.ID, &prevKind, &prevRaw, &prevText,
+		&prevMention, &prevRevoked); err != nil {
+		return InsertDuplicate, fmt.Errorf("storage: existing message row: %w", err)
+	}
+	if prevRevoked != 0 {
+		return InsertDuplicate, nil
+	}
+	kind, rawKind := escalateKind(prevKind, prevRaw, m)
+	if m.Text != "" || m.Kind != core.KindUnsupported || rawKind != prevRaw || m.HasMention || m.ReplyToID != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE messages SET
+				text = CASE WHEN ? != '' THEN ? ELSE text END,
+				kind = ?, raw_kind = ?,
+				has_mention = CASE WHEN ? != 0 THEN 1 ELSE has_mention END,
+				mentioned_jids = CASE WHEN ? != '[]' THEN ? ELSE mentioned_jids END,
+				reply_to_id = CASE WHEN ? != '' THEN ? ELSE reply_to_id END,
+				reply_to_sender = CASE WHEN ? != '' THEN ? ELSE reply_to_sender END,
+				quoted_text = CASE WHEN ? != '' THEN ? ELSE quoted_text END,
+				forwarded = CASE WHEN ? != 0 THEN 1 ELSE forwarded END,
+				updated_at = ?
+			WHERE id = ?`,
+			m.Text, m.Text, kind, rawKind,
+			m.HasMention, mentioned, mentioned,
+			m.ReplyToID, m.ReplyToID,
+			m.ReplyToSender, m.ReplyToSender,
+			m.QuotedText, m.QuotedText,
+			m.Forwarded, m.UpdatedAt, m.ID); err != nil {
+			return InsertDuplicate, fmt.Errorf("storage: update message content: %w", err)
+		}
+	}
+	// The mention badge counts what RecomputeUnreadCounters counts: unread,
+	// unrevoked incoming rows with has_mention. A row that only now learns
+	// it mentions us (a placeholder's content) joins it.
+	if m.HasMention && prevMention == 0 && !m.FromMe {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE chats SET mentioned_unread = mentioned_unread + 1
+			WHERE jid = ? AND ? > last_read_ts`, m.ChatJID, m.Timestamp); err != nil {
+			return InsertDuplicate, fmt.Errorf("storage: bump mention: %w", err)
+		}
+	}
+	if kind == prevKind && rawKind == prevRaw && (m.Text == "" || m.Text == prevText) {
+		return InsertDuplicate, nil
+	}
+	// Visible content changed: the chat-list line still shows the old one
+	// when this row is the chat's latest.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE chats SET last_preview = ?, updated_at = ?
+		WHERE jid = ? AND last_message_id = ?`,
+		previewOf(m), m.UpdatedAt, m.ChatJID, m.MessageID); err != nil {
+		return InsertDuplicate, fmt.Errorf("storage: upgrade preview: %w", err)
+	}
+	return InsertUpgraded, nil
+}
+
+// escalateKind applies the never-downgrade rule to a re-delivery: an
+// unsupported row takes a real kind, and a decrypt-failure placeholder takes
+// any classification the copy carries ("pending" → "poll").
+func escalateKind(prevKind, prevRaw string, m *core.Message) (kind, rawKind string) {
+	switch {
+	case prevKind != string(core.KindUnsupported):
+		return prevKind, prevRaw
+	case m.Kind != core.KindUnsupported:
+		return string(m.Kind), ""
+	case isPlaceholder(prevRaw) && m.RawKind != "" && !isPlaceholder(m.RawKind):
+		return prevKind, m.RawKind
+	}
+	return prevKind, prevRaw
+}
+
+func isPlaceholder(rawKind string) bool {
+	return rawKind == core.RawKindPending || rawKind == core.RawKindViewOnce
 }
 
 func insertMedia(ctx context.Context, tx *sql.Tx, rowID int64, md *core.MediaMeta) error {
@@ -700,8 +766,13 @@ func (s *Store) RewriteSenderJIDs(ctx context.Context, lidToPN map[string]string
 }
 
 // UnsupportedLabel gives empty-content rows an honest, specific placeholder.
+// The app's transcript mirrors this table (MessageTextRenderer).
 func UnsupportedLabel(rawKind string) string {
 	switch rawKind {
+	case core.RawKindPending:
+		return "Waiting for this message"
+	case core.RawKindViewOnce:
+		return "View once message (open it on your phone)"
 	case "skdm":
 		return "Message not synced yet"
 	case "template", "interactive":

@@ -565,3 +565,32 @@ func TestMarkChatReadLocalOnlyNoUnreadIsNoop(t *testing.T) {
 		t.Fatalf("noop read sent receipts: %+v", fw.marked)
 	}
 }
+
+// A decrypt-failure placeholder shows up like any arrival; when its copy
+// lands, the UI must get the stored row (message.updated), not silence.
+func TestPlaceholderUpgradeEmitsUpdate(t *testing.T) {
+	_, fw, d, st := newTestApp(t)
+	sub := subscribe(t, d, 16)
+
+	fw.push(core.EventMessage{Source: "live", Incoming: core.Incoming{
+		Kind: core.IncomingNew,
+		Message: core.Message{MessageID: "p1", ChatJID: group, SenderJID: alice,
+			Timestamp: 1700000100, Kind: core.KindUnsupported, RawKind: core.RawKindPending,
+			Source: "live"},
+	}})
+	if m := waitFor(t, sub, "message.received").Data.(core.Message); m.RawKind != core.RawKindPending {
+		t.Fatalf("placeholder event = %+v", m)
+	}
+
+	fw.push(incomingMsg("p1", group, alice, "the real text"))
+	m := waitFor(t, sub, "message.updated").Data.(core.Message)
+	if m.Kind != core.KindText || m.Text != "the real text" || m.RawKind != "" {
+		t.Fatalf("message.updated carried %+v", m)
+	}
+	if c := waitFor(t, sub, "chat.updated").Data.(core.Chat); c.JID != group {
+		t.Fatalf("chat.updated for %q", c.JID)
+	}
+	if c, _ := st.GetChat(context.Background(), group); c.UnreadCount != 1 || c.LastPreview != "the real text" {
+		t.Fatalf("chat after upgrade: unread=%d preview=%q", c.UnreadCount, c.LastPreview)
+	}
+}
