@@ -26,7 +26,7 @@ final class WhatsAppLinkParsingTests: XCTestCase {
     }
 
     func testApiWhatsAppComSendForm() throws {
-        let url = try XCTUnwrap(URL(string: "https://api.whatsapp.com/send?phone=254700000002&text=vote%201")))
+        let url = try XCTUnwrap(URL(string: "https://api.whatsapp.com/send?phone=254700000002&text=vote%201"))
         let parsed = AppState.parseWhatsAppChatLink(url)
         XCTAssertEqual(parsed?.digits, "254700000002")
         XCTAssertEqual(parsed?.text, "vote 1")
