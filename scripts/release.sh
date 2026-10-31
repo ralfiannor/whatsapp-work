@@ -30,6 +30,9 @@ EMBEDDED="$(/usr/libexec/PlistBuddy -c 'Print WWUpdatePublicKey' "$PLIST")"
 SIGNER="$(swift "$ROOT/scripts/release-key.swift" public)"
 [ "$EMBEDDED" = "$SIGNER" ] || {
   echo "release: the app's WWUpdatePublicKey does not match your release key" >&2; exit 1; }
+CORE="$("$APP/Contents/MacOS/whatsapp-core" -version)"
+[ "$CORE" = "$VERSION" ] || {
+  echo "release: the bundled core reports $CORE, expected $VERSION" >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
 
 STAGE="$(mktemp -d)"

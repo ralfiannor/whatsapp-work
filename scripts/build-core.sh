@@ -12,7 +12,11 @@ cd "$(dirname "$0")/../core"
 OUT=${1:-../dist}
 mkdir -p "$OUT"
 
-FLAGS=(-trimpath -ldflags "-s -w")
+# The core reports the app's version (READY line, /healthz, -version); one
+# source of truth: MARKETING_VERSION in apps/macos/project.yml.
+VERSION="$(sed -n 's/^ *MARKETING_VERSION: *"\(.*\)"$/\1/p' ../apps/macos/project.yml)"
+[ -n "$VERSION" ] || { echo "build-core: MARKETING_VERSION not found in project.yml" >&2; exit 1; }
+FLAGS=(-trimpath -ldflags "-s -w -X main.version=$VERSION")
 
 echo "== darwin/amd64 (Intel) =="
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build "${FLAGS[@]}" \
@@ -28,4 +32,4 @@ lipo -create -output "$OUT/whatsapp-core" \
 lipo -info "$OUT/whatsapp-core"
 
 ls -lh "$OUT" | awk 'NR>1 {print "  " $5 "\t" $9}'
-echo "Build OK → $OUT"
+echo "Build OK ($VERSION) → $OUT"

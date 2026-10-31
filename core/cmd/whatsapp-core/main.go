@@ -36,7 +36,9 @@ import (
 	"github.com/ralfiannor/whatsapp-work/internal/whatsapp"
 )
 
-const version = "0.1.0"
+// Stamped at build time from apps/macos/project.yml by scripts/build-core.sh
+// (-ldflags "-X main.version=…"); "dev" for a plain `go build` / `go run`.
+var version = "dev"
 
 func main() {
 	// Owner-only files regardless of inherited umask: the data dir holds
