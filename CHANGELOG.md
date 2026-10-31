@@ -8,6 +8,13 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Fixed
+
+- The core reports the app's version (READY line, `/healthz`,
+  `-version`). In 0.2.0 it still said 0.1.0, because the version was
+  hardcoded. `scripts/build-core.sh` now stamps it from `project.yml`,
+  and `release.sh` refuses to sign a build whose bundled core disagrees.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.

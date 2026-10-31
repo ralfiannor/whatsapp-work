@@ -48,9 +48,13 @@ gh release create v0.2.0 dist/WhatsAppWork-0.2.0-universal.dmg \
   dist/WhatsAppWork-0.2.0-universal.dmg.sig --title "WhatsApp Work 0.2.0" --generate-notes
 ```
 
-`release.sh` refuses to sign unless the built app has the expected
-version and its embedded `WWUpdatePublicKey` matches the key in your
-Keychain.
+`release.sh` refuses to sign unless all of these hold:
+
+- the built app has the expected version;
+- the bundled core reports the same version (`build-core.sh` stamps it
+  from `project.yml`);
+- the app's embedded `WWUpdatePublicKey` matches the key in your
+  Keychain.
 
 ## The release key
 
