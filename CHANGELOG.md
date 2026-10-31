@@ -8,23 +8,6 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
-### Added
-
-- Local notes: a Notes row pinned at the top of the chat list opens a
-  list of Markdown notes (headings, lists, checklists, quotes, code,
-  tables, inline styles) with edit and preview modes (`⌘5`, `⌥⌘N`,
-  `⇧⌘P`). Notes are stored only on this Mac in
-  `Application Support/WhatsAppWork/Notes/notes.json` (folder `0700`,
-  file `0600`), written by the app alone. The core never receives them
-  and logout does not delete them.
-
-### Fixed
-
-- The core reports the app's version (READY line, `/healthz`,
-  `-version`). In 0.2.0 it still said 0.1.0, because the version was
-  hardcoded. `scripts/build-core.sh` now stamps it from `project.yml`,
-  and `release.sh` refuses to sign a build whose bundled core disagrees.
-
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.
@@ -37,6 +20,38 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
   see each release's install notes).
 - Per-chat notification rules, media cache management UI, inbox-zero
   refinements, audio waveform thumbnails.
+
+## [0.3.0] - 2026-10-31
+
+### Added
+
+- Local notes: a Notes row pinned at the top of the chat list opens a
+  list of Markdown notes (headings, lists, checklists, quotes, code,
+  tables, inline styles) with edit and preview modes (`⌘5`, `⌥⌘N`,
+  `⇧⌘P`). Notes are stored only on this Mac in
+  `Application Support/WhatsAppWork/Notes/notes.json` (folder `0700`,
+  file `0600`), written by the app alone. The core never receives them
+  and logout does not delete them.
+
+### Changed
+
+- Go dependencies updated, including whatsmeow (2026-10-30) and
+  modernc.org/sqlite 1.61.0.
+- CI builds and tests the core (vet, tests, race) and the app (build and
+  unit tests) on every pull request and push to `main`. Releases are
+  still signed and published by hand.
+
+### Fixed
+
+- Group messages that fail to decrypt (for example "no sender key
+  state") no longer vanish. They show as "Waiting for this message"
+  (or "View once message (open it on your phone)"), the core asks your
+  phone for a copy when the sender does not re-send within 5 s, and the
+  row upgrades in place when the real message arrives.
+- The core reports the app's version (READY line, `/healthz`,
+  `-version`). In 0.2.0 it still said 0.1.0, because the version was
+  hardcoded. `scripts/build-core.sh` now stamps it from `project.yml`,
+  and `release.sh` refuses to sign a build whose bundled core disagrees.
 
 ## [0.2.0] - 2026-10-31
 
@@ -177,6 +192,7 @@ drift, SQL/performance, lifecycle state machines, adversarial input —
 - Unread counters: revoke decrements are idempotent across history
   replays; out-of-order read receipts cannot hide newer unread traffic.
 
-[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.1.0
