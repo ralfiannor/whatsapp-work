@@ -89,6 +89,7 @@ enum CoreError: LocalizedError {
     case lockHeld
     case crashed(exitCode: Int32)
     case notRunning
+    case stoppedOutsideApp
 
     var errorDescription: String? {
         switch self {
@@ -97,6 +98,7 @@ enum CoreError: LocalizedError {
         case .lockHeld: return "another core instance holds the lock"
         case .crashed(let code): return "core exited with code \(code)"
         case .notRunning: return "the WhatsApp core is not running"
+        case .stoppedOutsideApp: return "it was ended outside the app — another copy of WhatsApp Work may have taken over"
         }
     }
 }
@@ -484,10 +486,17 @@ final class SidecarManager: ObservableObject {
         DispatchQueue.main.async { self.handshake = nil }
 
         guard code != 0 else {
+            // Every stop the app asks for goes through terminateProcess(),
+            // which retires this generation before the exit lands — so an
+            // owned clean exit was a signal from OUTSIDE the app (another
+            // copy reclaiming the lock, a test host, Activity Monitor).
+            // Going quietly idle left a window where every request failed
+            // with no banner. Surface it with Restart; no auto-restart, which
+            // would fight another copy over the lock.
             desiredRunning = false
             lifecycleGeneration &+= 1
             pendingRestartOwner = nil
-            setPhase(.idle)
+            setPhase(.failed(CoreError.stoppedOutsideApp.localizedDescription))
             return
         }
         pendingRestartOwner = processID

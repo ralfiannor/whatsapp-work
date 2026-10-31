@@ -764,6 +764,40 @@ final class RuntimePoliciesTests: XCTestCase {
         sidecar.stopBlocking()
     }
 
+    func testSidecarCleanExitNobodyAskedForSurfacesFailureWithoutRespawn() async {
+        let assertions = SleepAssertionProbe()
+        let lifecycle = SidecarLifecycleProbe()
+        let sidecar = makeLifecycleTestSidecar(lifecycle, assertions: assertions)
+        let firstProcess = expectation(description: "first process spawned")
+        let firstTimeout = expectation(description: "first timeout armed")
+        lifecycle.expectProcess(1, firstProcess)
+        lifecycle.expectSchedule(after: 90, count: 1, firstTimeout)
+        sidecar.start()
+        await fulfillment(of: [firstProcess, firstTimeout], timeout: 2)
+
+        // SIGTERM from another copy's orphan reclaim: the core shuts down
+        // cleanly (exit 0) although the app never asked it to.
+        lifecycle.process(at: 0).emitTermination(code: 0)
+        lifecycle.syncManagerQueue()
+        await flushSidecarPublishedState()
+        XCTAssertEqual(sidecar.phase, .failed(CoreError.stoppedOutsideApp.localizedDescription))
+        XCTAssertEqual(lifecycle.processCount, 1, "no auto-restart: it would fight the other copy for the lock")
+
+        // The banner's Restart recovers.
+        let secondProcess = expectation(description: "restart spawns a new core")
+        lifecycle.expectProcess(2, secondProcess)
+        sidecar.restartNow()
+        await fulfillment(of: [secondProcess], timeout: 2)
+
+        // A stop the app asked for stays a quiet idle.
+        sidecar.stop()
+        lifecycle.process(at: 1).emitTermination(code: 0)
+        lifecycle.syncManagerQueue()
+        await flushSidecarPublishedState()
+        XCTAssertEqual(sidecar.phase, .idle)
+        sidecar.stopBlocking()
+    }
+
     @MainActor
     func testAppStateRoutesCoreSleepSignalsAndExplicitLogout() async {
         let probe = SleepAssertionProbe()
