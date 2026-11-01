@@ -8,6 +8,14 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Fixed
+
+- wa.me "Continue to Chat" links open the chat in the existing window.
+  Each link used to open a second window, which also set up the app's
+  connection watchers and update checks a second time.
+- A `+` in a wa.me link's `text=` prefill becomes a space
+  (`text=hello+world` → "hello world"); `%2B` stays a literal plus.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.

@@ -32,6 +32,16 @@ final class WhatsAppLinkParsingTests: XCTestCase {
         XCTAssertEqual(parsed?.text, "vote 1")
     }
 
+    func testFormEncodedPlusDecodesToSpace() throws {
+        let url = try XCTUnwrap(URL(string: "https://wa.me/254700000002?text=hello+world%2B1"))
+        XCTAssertEqual(AppState.parseWhatsAppChatLink(url)?.text, "hello world+1")
+    }
+
+    func testCustomSchemePlusDecodesToSpace() throws {
+        let url = try XCTUnwrap(URL(string: "whatsapp://send/?phone=254700000002&text=vote+1&type=phone_number"))
+        XCTAssertEqual(AppState.parseWhatsAppChatLink(url)?.text, "vote 1")
+    }
+
     func testPlainExternalURLIsNotOurs() throws {
         let url = try XCTUnwrap(URL(string: "https://example.com/6285172277259"))
         XCTAssertNil(AppState.parseWhatsAppChatLink(url))
@@ -52,6 +62,12 @@ final class RoutableLinkRewriteTests: XCTestCase {
         let parsed = AppState.parseWhatsAppChatLink(wrapped)
         XCTAssertEqual(parsed?.digits, "6285172277259")
         XCTAssertEqual(parsed?.text, "vote 52831206")
+    }
+
+    func testWrappedLinkKeepsPlusAsSpace() throws {
+        let url = try XCTUnwrap(URL(string: "https://wa.me/254700000002?text=hello+world%2B1"))
+        let wrapped = MessageTextRenderer.routableLinkURL(url)
+        XCTAssertEqual(AppState.parseWhatsAppChatLink(wrapped)?.text, "hello world+1")
     }
 
     func testExternalURLKeptVerbatim() throws {

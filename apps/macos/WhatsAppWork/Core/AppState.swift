@@ -251,7 +251,13 @@ final class AppState: ObservableObject {
         if let runtimeClient { connectionRefresh.install(runtimeClient) }
     }
 
+    /// Every window's RootView calls boot() on appear; a second window must
+    /// not stack another phase sink, wake observer and update loop.
+    private var booted = false
+
     func boot() {
+        guard !booted else { return }
+        booted = true
         sidecar.start()
         // Watch sidecar phase; (re)connect clients when running.
         sidecar.$phase
@@ -2702,7 +2708,12 @@ final class AppState: ObservableObject {
             return parseWhatsAppChatLink(inner)
         }
         let items = comp.queryItems ?? []
-        let text = items.first(where: { $0.name == "text" })?.value?
+        // wa.me links are form-encoded: `+` is a space ("hello+world") and a
+        // literal plus arrives as %2B. queryItems keeps `+` verbatim, so
+        // decode `text` from its percent-encoded form.
+        let text = comp.percentEncodedQueryItems?.first(where: { $0.name == "text" })?.value?
+            .replacingOccurrences(of: "+", with: " ")
+            .removingPercentEncoding?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let textOut = (text?.isEmpty == true) ? nil : text
 
