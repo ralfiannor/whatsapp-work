@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/ralfiannor/whatsapp-work/internal/core"
 	"github.com/ralfiannor/whatsapp-work/internal/storage"
@@ -149,6 +150,68 @@ func BenchmarkChatsPage(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if _, err := st.ListChats(ctx, 50, 0, "", storage.FilterAll); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkInbox is the /inbox refetch cost on a live-traffic fixture
+// shaped like a real account: most incoming traffic lands in groups that
+// are NOT marked Work (never inbox items), the rest in DMs and one work
+// group.
+func BenchmarkInbox(b *testing.B) {
+	st := openTestStore(b)
+	ctx := context.Background()
+	n := benchFixtureSize()
+	chats := []core.Chat{{JID: "work@g.us", Kind: core.KindGroup, DisplayName: "Work"}}
+	for i := 0; i < 20; i++ {
+		chats = append(chats, core.Chat{JID: fmt.Sprintf("noise%d@g.us", i), Kind: core.KindGroup})
+	}
+	for i := 0; i < 30; i++ {
+		chats = append(chats, core.Chat{JID: fmt.Sprintf("2547%08d@s.whatsapp.net", i), Kind: core.KindDirect})
+	}
+	for _, c := range chats {
+		if err := st.EnsureChat(ctx, c); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := st.SetChatWork(ctx, "work@g.us", true); err != nil {
+		b.Fatal(err)
+	}
+	base := time.Now().Unix() - int64(n)
+	var buf []core.Message
+	for i := 0; i < n; i++ {
+		var jid string
+		switch {
+		case i%100 < 96:
+			jid = fmt.Sprintf("noise%d@g.us", i%20)
+		case i%100 < 99:
+			jid = fmt.Sprintf("2547%08d@s.whatsapp.net", i%30)
+		default:
+			jid = "work@g.us"
+		}
+		buf = append(buf, core.Message{
+			MessageID: fmt.Sprintf("l%d", i), ChatJID: jid, SenderJID: "254700000001@s.whatsapp.net",
+			Timestamp: base + int64(i), Kind: core.KindText, Text: "live chatter",
+			Source: "live", MentionedJIDs: []string{},
+		})
+		if len(buf) == 500 {
+			if _, err := st.InsertMessages(ctx, buf); err != nil {
+				b.Fatal(err)
+			}
+			buf = buf[:0]
+		}
+	}
+	if len(buf) > 0 {
+		if _, err := st.InsertMessages(ctx, buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+	now := time.Now().Unix()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := st.Inbox(ctx, now, 100); err != nil {
 			b.Fatal(err)
 		}
 	}

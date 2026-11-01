@@ -556,3 +556,29 @@ and the scoped correction report are recorded in
 `.superpowers/sdd/2026-09-04-runtime-performance-hardening/final-fix-report.md`.
 The unchanged Go/race/storage results above are reused; this wave modifies no Go
 code. Earlier live-account measurement limitations remain unchanged.
+
+## Inbox pending set — 2026-11-01
+
+`/inbox` drives from the pending local-state rows (v15). Live ingest opened
+one for EVERY incoming message, including chatter in groups not marked Work —
+rows the inbox never shows and the user cannot Done. On a real account
+(~640k messages) 96% of the 381k pending rows were such chatter, the query
+took 1.7 s warm / 3.6 s cold on every inbox refetch, and 27 of the 100
+`LIMIT` slots went to conversations the core then dropped.
+
+Fix: only inbox-eligible messages (mention, direct chat, work group) get a
+pending row; Mark as Work backfills the recent unread backlog; migration v16
+drops the existing chatter rows; the query applies the same eligibility rule
+before `LIMIT`. Machine: MacBookPro15,2 (i5-8259U), macOS 14.8.
+
+| Measurement | Before | After |
+|---|---:|---:|
+| `BenchmarkInbox`, 150k live rows, 96% unmarked-group chatter | 1,138 ms/op | 43.2 ms/op |
+| Real-account snapshot, inbox query (`sqlite3`, warm, incl. process start) | 1.67 s | 0.08 s |
+| Real-account pending rows | 381,295 | 12,243 |
+| Real-account conversations returned (limit 100) | 73 | 83 (all eligible) |
+| Migration v16, one-time at first launch | — | 2.2 s (369k rows deleted) |
+
+`EXPLAIN QUERY PLAN`: the inbox query still scans `idx_local_state_pending`
+with rowid lookups; the Work-toggle backfill/cleanup and Done statements use
+`idx_messages_chat_ts`; the ingest insert is a rowid lookup. No `SCAN messages`.

@@ -49,8 +49,20 @@ func (s *Store) SetChatStarred(ctx context.Context, jid string, starred bool) er
 }
 
 // SetChatWork marks a group as a work group (v0.2 focus classification).
+//
+// The flag moves the chat's traffic in or out of the inbox, so the pending
+// set follows it: marking pulls in the recent unread backlog (live, last 7
+// days, past the read position — the v13 rule), unmarking drops the items
+// that only the flag made eligible. Rows carrying user state (starred,
+// done) are kept either way.
 func (s *Store) SetChatWork(ctx context.Context, jid string, work bool) error {
-	res, err := s.w.ExecContext(ctx, `UPDATE chats SET is_work = ?, updated_at = ? WHERE jid = ?`,
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: chat work begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `UPDATE chats SET is_work = ?, updated_at = ? WHERE jid = ?`,
 		work, now(), jid)
 	if err != nil {
 		return fmt.Errorf("storage: chat work: %w", err)
@@ -58,7 +70,26 @@ func (s *Store) SetChatWork(ctx context.Context, jid string, work bool) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if work {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO local_message_state (message_id, done, snoozed_until, starred, priority)
+			SELECT m.id, 0, NULL, 0, 0
+			FROM messages m JOIN chats c ON c.jid = m.chat_jid
+			WHERE m.chat_jid = ? AND m.source = 'live' AND m.from_me = 0
+			  AND m.revoked = 0 AND m.kind != 'system'
+			  AND m.timestamp > c.last_read_ts AND m.timestamp > ?
+			ON CONFLICT (message_id) DO NOTHING`, jid, now()-7*24*3600)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM local_message_state
+			WHERE done = 0 AND starred = 0 AND message_id IN (
+				SELECT m.id FROM messages m JOIN chats c ON c.jid = m.chat_jid
+				WHERE m.chat_jid = ? AND NOT `+inboxEligible+`)`, jid)
+	}
+	if err != nil {
+		return fmt.Errorf("storage: chat work pending: %w", err)
+	}
+	return tx.Commit()
 }
 
 type localStateSet struct {
@@ -135,6 +166,28 @@ func nullableInt(v int64) any {
 	return v
 }
 
+// inboxEligible is the inbox entry rule over `messages m JOIN chats c`: a
+// mention, a direct chat, or a work-marked group. Only eligible live
+// incoming rows get a pending local-state row (openInboxItemTx) — chatter in
+// unmarked groups never becomes work, and holding it pending made the
+// inbox query scale with every group's traffic.
+const inboxEligible = `(m.has_mention = 1 OR c.kind != 'group' OR c.is_work = 1)`
+
+// openInboxItemTx gives a live incoming message its pending local-state row
+// when it is an inbox item. Idempotent: an existing row (done, snoozed,
+// starred) keeps its state.
+func openInboxItemTx(ctx context.Context, tx *sql.Tx, rowID int64) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO local_message_state (message_id, done, snoozed_until, starred, priority)
+		SELECT m.id, 0, NULL, 0, 0
+		FROM messages m JOIN chats c ON c.jid = m.chat_jid
+		WHERE m.id = ? AND m.source = 'live' AND m.from_me = 0 AND `+inboxEligible+`
+		ON CONFLICT (message_id) DO NOTHING`, rowID); err != nil {
+		return fmt.Errorf("storage: inbox state row: %w", err)
+	}
+	return nil
+}
+
 // Inbox returns the actionable work inbox at instant nowTS as CONVERSATIONS:
 // for each chat with pending items (live, incoming, not done, snooze lapsed
 // — and the chat itself not snoozed), one digest row with the newest item,
@@ -190,6 +243,7 @@ func (s *Store) Inbox(ctx context.Context, nowTS int64, limit int) (*core.Inbox,
 			  AND m.source = 'live'
 			  AND m.revoked = 0
 			  AND m.kind != 'system'
+			  AND `+inboxEligible+`
 		) j
 		WHERE j.rn = 1
 		ORDER BY j.timestamp DESC
@@ -293,7 +347,8 @@ const doneRecentLimit = 20
 
 // SetChatDone completes (or reopens) EVERY pending inbox item of a
 // conversation in one write — the bulk action behind a conversation-level
-// Done. Only live incoming content rows are touched; done stamps done_at so
+// Done. Only inbox-eligible live incoming content rows are touched (a
+// reopen must not turn group chatter into hidden pending rows); done stamps done_at so
 // the audit section can order by completion.
 func (s *Store) SetChatDone(ctx context.Context, jid string, done bool) error {
 	tx, err := s.w.BeginTx(ctx, nil)
@@ -325,9 +380,10 @@ func (s *Store) SetChatDone(ctx context.Context, jid string, done bool) error {
 		INSERT INTO local_message_state (message_id, done, done_at, snoozed_until, starred, priority)
 		SELECT m.id, ?, ?, NULL, COALESCE(ls.starred, 0), 0
 		FROM messages m
+		JOIN chats c ON c.jid = m.chat_jid
 		LEFT JOIN local_message_state ls ON ls.message_id = m.id
 		WHERE m.chat_jid = ? AND m.from_me = 0 AND m.source = 'live'
-		  AND m.revoked = 0 AND m.kind != 'system'
+		  AND m.revoked = 0 AND m.kind != 'system' AND `+inboxEligible+`
 		ON CONFLICT (message_id) DO UPDATE SET
 			done = excluded.done,
 			done_at = excluded.done_at,

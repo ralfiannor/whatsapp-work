@@ -8,6 +8,17 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Fixed
+
+- Work inbox (⌘4) loaded slowly (1.7–3.6 s per refresh on a large
+  account): chatter in groups not marked Work was held as hidden pending
+  items. Only mentions, direct messages and work-group traffic are now
+  inbox items; refresh drops to ~80 ms. Marking a group Work pulls in its
+  unread traffic from the last 7 days. A one-time migration (v16) cleans
+  up existing rows on first launch.
+- Hidden group conversations no longer push visible ones out of the
+  inbox's 100-conversation limit.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.

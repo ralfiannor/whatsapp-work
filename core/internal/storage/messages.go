@@ -149,13 +149,10 @@ func (s *Store) insertMessageTx(ctx context.Context, tx *sql.Tx, m *core.Message
 				mention, m.ChatJID, m.Timestamp); err != nil {
 				return InsertDuplicate, fmt.Errorf("storage: bump unread: %w", err)
 			}
-			// The inbox reads pending items from local_message_state — a
-			// live incoming row must exist there from birth (done=0).
-			if _, err = tx.ExecContext(ctx, `
-				INSERT INTO local_message_state (message_id, done, snoozed_until, starred, priority)
-				VALUES (?, 0, NULL, 0, 0)
-				ON CONFLICT (message_id) DO NOTHING`, m.ID); err != nil {
-				return InsertDuplicate, fmt.Errorf("storage: inbox state row: %w", err)
+			// The inbox reads pending items from local_message_state — an
+			// eligible live incoming row is pending from birth.
+			if err = openInboxItemTx(ctx, tx, m.ID); err != nil {
+				return InsertDuplicate, err
 			}
 		}
 		if _, err = tx.ExecContext(ctx, `
@@ -222,12 +219,16 @@ func redeliverTx(ctx context.Context, tx *sql.Tx, m *core.Message, mentioned str
 	}
 	// The mention badge counts what RecomputeUnreadCounters counts: unread,
 	// unrevoked incoming rows with has_mention. A row that only now learns
-	// it mentions us (a placeholder's content) joins it.
+	// it mentions us (a placeholder's content) joins it — and becomes an
+	// inbox item even in an unmarked group.
 	if m.HasMention && prevMention == 0 && !m.FromMe {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE chats SET mentioned_unread = mentioned_unread + 1
 			WHERE jid = ? AND ? > last_read_ts`, m.ChatJID, m.Timestamp); err != nil {
 			return InsertDuplicate, fmt.Errorf("storage: bump mention: %w", err)
+		}
+		if err := openInboxItemTx(ctx, tx, m.ID); err != nil {
+			return InsertDuplicate, err
 		}
 	}
 	if kind == prevKind && rawKind == prevRaw && (m.Text == "" || m.Text == prevText) {
@@ -611,21 +612,38 @@ func (s *Store) SetEdited(ctx context.Context, chatJID, senderJID, messageID, ne
 	// (e.g. a media caption edit whose payload is the media message itself)
 	// — keep the stored text AND its mention metadata instead of wiping the
 	// caption and its FTS row / mention flag.
-	if _, err := s.w.ExecContext(ctx, `
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: edit begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var rowID int64
+	err = tx.QueryRowContext(ctx, `
 		UPDATE messages SET
 			text = CASE WHEN ? = '' THEN text ELSE ? END,
 			edited_ts = ?,
 			has_mention = CASE WHEN ? = '' THEN has_mention ELSE ? END,
 			mentioned_jids = CASE WHEN ? = '' THEN mentioned_jids ELSE ? END,
 			updated_at = ?
-		WHERE chat_jid = ? AND sender_jid = ? AND message_id = ?`,
+		WHERE chat_jid = ? AND sender_jid = ? AND message_id = ?
+		RETURNING id`,
 		newText, newText, editedTS,
 		newText, hasMention,
 		newText, string(mentioned),
-		now(), chatJID, senderJID, messageID); err != nil {
+		now(), chatJID, senderJID, messageID).Scan(&rowID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // edit of a message we never stored
+	}
+	if err != nil {
 		return fmt.Errorf("storage: edit: %w", err)
 	}
-	return nil
+	// An edit that adds a mention makes the message an inbox item.
+	if newText != "" && hasMention {
+		if err := openInboxItemTx(ctx, tx, rowID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // QuotedTextOf returns a display snippet for the message a reply points

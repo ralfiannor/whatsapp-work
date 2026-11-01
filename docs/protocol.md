@@ -236,7 +236,10 @@ Semantics (docs/feature-audit-2026-08-30.md):
 - **Entry**: a live-delivered incoming message that is a mention, a direct
   message, or traffic in a work-marked group. History-sync rows never enter
   (they are born read); the v11 baseline marked pre-existing rows done and v13
-  reopened the recent-unread backlog.
+  reopened the recent-unread backlog. Chatter in an unmarked group is never
+  an item: marking a group Work pulls in its unread live traffic of the last
+  7 days, and unmarking drops the items only the flag made eligible
+  (mentions and starred messages stay).
 - **Exit**: conversation `done` (all items at once), or a not-yet-due
   conversation snooze. **Read state is not an exit** — reading a chat (on
   this device or the phone) keeps its items actionable. `Unread`/`Mentions`
