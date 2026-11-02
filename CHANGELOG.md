@@ -8,6 +8,27 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Planned
+
+- Appearance preferences (themes, typography) and adaptive member panel.
+- Accessibility pass (VoiceOver, contrast) and the pending manual
+  validation checklist.
+- UI performance baseline on a live account (Instruments: cold start,
+  chat switch, scroll) — the gate before further visual changes.
+- Mute / pin / archive wiring (columns exist, no UI yet).
+- Signed & notarized builds (until then, releases are ad-hoc signed;
+  see each release's install notes).
+- Per-chat notification rules, media cache management UI, inbox-zero
+  refinements, audio waveform thumbnails.
+
+## [0.3.1] - 2026-11-02
+
+### Added
+
+- A showcase video in the README (`docs/media/showcase.mp4`, with an
+  animated WebP preview). It uses fictional chats only and is rendered
+  from `scripts/showcase/` with `node scripts/showcase/render.mjs`.
+
 ### Fixed
 
 - wa.me "Continue to Chat" links open the chat in the existing window.
@@ -23,19 +44,6 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
   up existing rows on first launch.
 - Hidden group conversations no longer push visible ones out of the
   inbox's 100-conversation limit.
-
-### Planned
-
-- Appearance preferences (themes, typography) and adaptive member panel.
-- Accessibility pass (VoiceOver, contrast) and the pending manual
-  validation checklist.
-- UI performance baseline on a live account (Instruments: cold start,
-  chat switch, scroll) — the gate before further visual changes.
-- Mute / pin / archive wiring (columns exist, no UI yet).
-- Signed & notarized builds (until then, releases are ad-hoc signed;
-  see each release's install notes).
-- Per-chat notification rules, media cache management UI, inbox-zero
-  refinements, audio waveform thumbnails.
 
 ## [0.3.0] - 2026-10-31
 
@@ -208,7 +216,8 @@ drift, SQL/performance, lifecycle state machines, adversarial input —
 - Unread counters: revoke decrements are idempotent across history
   replays; out-of-order read receipts cannot hide newer unread traffic.
 
-[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.1.0
