@@ -607,28 +607,32 @@ pages. The v0.3.0 install after 15 h of uptime showed app/core RSS of
 
 | Connected idle, 10 min after launch | Before (v0.3.1, `d6723dc`) | After | Budget |
 |---|---:|---:|---:|
-| App CPU (cumulative, 5 min) | 2.58% | PENDING | — |
-| Core CPU (cumulative, 5 min) | 7.29% | PENDING | — |
-| **Both, CPU** | **9.87%** | **PENDING** | ≤ 1% |
-| App `ps` %CPU avg · p95 · max | 2.12 · 11.6 · 69.5 | PENDING | — |
-| Core `ps` %CPU avg · p95 · max | 7.14 · 78.7 · 138.4 | PENDING | — |
-| App footprint | 49–52 MB | 47 MB | < 90 MB |
-| Core footprint | 94 MB | 45 MB | < 60 MB |
-| **Combined footprint** | **≈146 MB** | **92 MB** | < 150 MB |
-| App / core RSS | 55.0 / 61.2 MB (5-min avg) | 49.2 / 48.1 MB (first 51 s) | — |
-| Messages received in the window | 18 | — | — |
+| App CPU (cumulative, 5 min) | 2.58% | 0.75% | — |
+| Core CPU (cumulative, 5 min) | 7.29% | 0.22% | — |
+| **Both, CPU** | **9.87%** | **0.97%** | ≤ 1% |
+| App `ps` %CPU avg · p95 · max | 2.12 · 11.6 · 69.5 | 0.78 · 0.1 · 65.3 | — |
+| Core `ps` %CPU avg · p95 · max | 7.14 · 78.7 · 138.4 | 0.18 · 0.1 · 26.7 | — |
+| Samples with any CPU (app / core) | 47 / 57 of 300 | 18 / 18 of 300 | — |
+| App footprint | 49–52 MB | 44–45 MB | < 90 MB |
+| Core footprint | 94 MB | 38–46 MB | < 60 MB |
+| **Combined footprint** | **≈146 MB** | **84–91 MB** | < 150 MB |
+| App / core RSS avg | 55.0 / 61.2 MB | 44.8 / 33.0 MB | — |
+| Messages received in the window | 18 | 4 | — |
+| Name passes in the window | 8 | 1 | — |
 
-The after run is incomplete: 55 s into its window the installed app was
-launched from `/Applications`, and its stale-core sweep stopped the measured
-core. The after footprints are the snapshot taken at 600 s, before that,
-in the same state as the before row (before: app 49 MB at 600 s, core
-94 MB at 700 s). That build predates two final edits with no memory effect:
-the v17 index predicate moving from `LIKE` to `substr` (identical plans)
-and the chat row's day input. The 5-minute CPU cells need a clean re-run;
-until then, the CPU evidence is the per-change measurements below. The
-before run's core figure is dominated by the post-launch burst of push-name
-events: over the v0.3.0 install's 15 h uptime the lifetime averages were
-app 2.8% and core 0.7%.
+**Traffic differed, so read the CPU rows with care.** The after window was
+much quieter: 4 messages vs 18, and 9 messages over its whole 16-minute
+session vs 92 over the before session's 27 minutes. The ≤1% result is real
+for that window, but the before/after CPU ratio is not like-for-like. The
+controlled evidence is per change, below: a name pass costs ~0.2 s instead
+of ~2.3 s, and an `AppState` update pass costs ~130 ms of main thread
+instead of ~390 ms. Footprint is less traffic-sensitive. The after run used
+the PR build, launched after the live DB was rewound to v16 so that v17
+applied fresh.
+
+The before run's core figure is dominated by the post-launch burst of
+push-name events. Over the v0.3.0 install's 15 h uptime the lifetime averages
+were app 2.8% and core 0.7%.
 
 ### What the idle time was spent on
 
@@ -740,6 +744,6 @@ tests passed, Release app built universal (`x86_64 arm64`) with
   re-renders on every event. Needs a run with a manually selected chat.
 - Long-run growth: the 15 h v0.3.0 app reached 114 MB footprint (52 MB at
   27 min here). Not attributed yet; needs a MallocStackLogging run.
-- End-to-end 5-minute CPU for the after build (see above).
+- A like-for-like end-to-end CPU comparison under similar traffic.
 - A long-idle core will still fill its 5 × 4 MB page caches; the 15 h
   number with this build is not measured.
