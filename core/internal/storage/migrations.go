@@ -27,6 +27,7 @@ var migrations = []struct {
 	{14, "conversation-level snooze on chats", migrationV14},
 	{15, "pending-state index for the inbox query; drop superseded inbox indexes", migrationV15},
 	{16, "drop pending rows of chatter in groups not marked work", migrationV16},
+	{17, "partial index over the rows still carrying an @lid sender", migrationV17},
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -499,4 +500,19 @@ WHERE done = 0 AND starred = 0
   AND message_id IN (
     SELECT m.id FROM messages m JOIN chats c ON c.jid = m.chat_jid
     WHERE c.kind = 'group' AND c.is_work = 0 AND m.has_mention = 0);
+`
+
+// migrationV17: the name pass looks for rows still stored under a raw @lid
+// sender (a few hundred of ~640k on a real account). `LIKE '%@lid'` cannot
+// seek idx_messages_sender, so every pass full-scanned messages (~0.5 s, and
+// it churned the reader's whole page cache). This partial index holds only
+// those rows and covers the derive query's columns; queries reach it by
+// repeating its exact `substr(sender_jid, -4) = '@lid'` term. The term is
+// deliberately not the LIKE older builds use: their unhinted derive join
+// flips to a 3 s plan when a LIKE-matching partial index exists, so a
+// downgrade (or a release build run on a dev build's data dir) must not
+// see it. Rows leave the index as soon as a rewrite canonicalizes them.
+const migrationV17 = `
+CREATE INDEX IF NOT EXISTS idx_messages_lid_sender
+	ON messages(sender_jid, chat_jid, message_id) WHERE substr(sender_jid, -4) = '@lid';
 `

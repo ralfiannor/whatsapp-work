@@ -6,6 +6,8 @@ package storage_test
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/ralfiannor/whatsapp-work/internal/core"
@@ -216,5 +218,59 @@ func TestDeriveSenderMappings(t *testing.T) {
 	}
 	if got[lid] != pn {
 		t.Fatalf("derived[%q] = %q, want %q", lid, got[lid], pn)
+	}
+}
+
+// The name pass reads the rows still carrying an @lid sender on every run.
+// Both shapes must resolve through the v17 partial index — a `SCAN messages`
+// here re-reads the whole table (~640k rows on a real account) per pass.
+func TestLIDSenderQueriesUsePartialIndex(t *testing.T) {
+	st := openTestStore(t)
+	db, err := sql.Open("sqlite", st.DSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for name, q := range map[string]string{
+		"derive": `
+		WITH lid_rows AS MATERIALIZED (
+			SELECT chat_jid, message_id, sender_jid FROM messages
+			WHERE substr(sender_jid, -4) = '@lid'
+		)
+		SELECT DISTINCT lid_rows.sender_jid, p.sender_jid
+		FROM lid_rows
+		CROSS JOIN messages p INDEXED BY idx_messages_msgid
+			ON p.chat_jid = lid_rows.chat_jid
+			AND p.message_id = lid_rows.message_id
+			AND p.sender_jid LIKE '%@s.whatsapp.net'`,
+		"rewrite senders": `SELECT DISTINCT sender_jid FROM messages WHERE substr(sender_jid, -4) = '@lid'`,
+	} {
+		rows, err := db.QueryContext(context.Background(), "EXPLAIN QUERY PLAN "+q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		rows.Close()
+		plan := strings.Join(details, "\n")
+		t.Logf("%s plan:\n%s", name, plan)
+		if !strings.Contains(plan, "idx_messages_lid_sender") {
+			t.Errorf("%s: plan does not use idx_messages_lid_sender:\n%s", name, plan)
+		}
+		for _, d := range details {
+			full := strings.HasPrefix(d, "SCAN p") ||
+				(strings.HasPrefix(d, "SEARCH p") && !strings.Contains(d, "idx_messages_msgid (message_id=?)")) ||
+				(strings.HasPrefix(d, "SCAN messages") && !strings.Contains(d, "idx_messages_lid_sender"))
+			if full {
+				t.Errorf("%s: scans every message row:\n%s", name, plan)
+			}
+		}
 	}
 }
