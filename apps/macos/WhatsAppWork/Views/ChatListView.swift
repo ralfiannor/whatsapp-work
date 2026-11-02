@@ -35,18 +35,48 @@ struct ChatListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarHeader(tab: state.sidebarTab, focusMode: state.focusMode, actions: state)
-                .equatable()
+            HStack(spacing: 8) {
+                Picker("Sidebar", selection: $state.sidebarTab) {
+                    Text("Chats").tag(SidebarTab.chats)
+                    Text("Inbox").tag(SidebarTab.inbox)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: .infinity)
+                Button {
+                    state.toggleFocusMode()
+                } label: {
+                    Image(systemName: state.focusMode ? "moon.fill" : "moon")
+                        .foregroundStyle(state.focusMode ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(state.focusMode
+                      ? "Focus Mode on — only work chats notify"
+                      : "Focus Mode off — all chats notify")
+                .accessibilityLabel("Focus Mode")
+                .accessibilityValue(state.focusMode ? "on, only work chats notify" : "off")
+            }
+            .padding(.horizontal, 10).padding(.top, 6)
             Divider().padding(.top, 6)
             if state.sidebarTab == .inbox {
                 InboxView()
             } else {
-                ChatFilterBar(filter: state.chatFilter, actions: state)
-                    .equatable()
+                Picker("Filter", selection: filterBinding) {
+                    Text("All").tag("all")
+                    Text("Unread").tag("unread")
+                    Text("Mentions").tag("mentions")
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 10).padding(.vertical, 6)
                 Divider()
                 chatList
             }
         }
+    }
+
+    private var filterBinding: Binding<String> {
+        Binding(get: { state.chatFilter }, set: { f in
+            Task { await state.applyFilter(f) }
+        })
     }
 
     /// Selection tag of the pinned Notes row. JIDs always contain "@", so
@@ -189,69 +219,6 @@ struct ChatListView: View {
         state.markSelectionBrowsing()
         state.selectedChat = state.chats[next].jid
         return .handled
-    }
-}
-
-/// Tab picker + Focus Mode toggle, fed values only. Segmented controls are
-/// costly to re-measure on old Intel (~38 ms per chat-list update when they
-/// were inline); as an Equatable value view they re-render only when the
-/// tab or Focus Mode actually changes.
-struct SidebarHeader: View, Equatable {
-    let tab: SidebarTab
-    let focusMode: Bool
-    /// Action target only: never read while rendering.
-    let actions: AppState
-
-    static func == (lhs: SidebarHeader, rhs: SidebarHeader) -> Bool {
-        lhs.tab == rhs.tab && lhs.focusMode == rhs.focusMode
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Picker("Sidebar", selection: Binding(get: { tab },
-                                                 set: { actions.sidebarTab = $0 })) {
-                Text("Chats").tag(SidebarTab.chats)
-                Text("Inbox").tag(SidebarTab.inbox)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: .infinity)
-            Button {
-                actions.toggleFocusMode()
-            } label: {
-                Image(systemName: focusMode ? "moon.fill" : "moon")
-                    .foregroundStyle(focusMode ? Color.accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-            .help(focusMode
-                  ? "Focus Mode on — only work chats notify"
-                  : "Focus Mode off — all chats notify")
-            .accessibilityLabel("Focus Mode")
-            .accessibilityValue(focusMode ? "on, only work chats notify" : "off")
-        }
-        .padding(.horizontal, 10).padding(.top, 6)
-    }
-}
-
-/// All / Unread / Mentions filter, fed values only (see SidebarHeader).
-struct ChatFilterBar: View, Equatable {
-    let filter: String
-    /// Action target only: never read while rendering.
-    let actions: AppState
-
-    static func == (lhs: ChatFilterBar, rhs: ChatFilterBar) -> Bool {
-        lhs.filter == rhs.filter
-    }
-
-    var body: some View {
-        Picker("Filter", selection: Binding(get: { filter }, set: { f in
-            Task { await actions.applyFilter(f) }
-        })) {
-            Text("All").tag("all")
-            Text("Unread").tag("unread")
-            Text("Mentions").tag("mentions")
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 10).padding(.vertical, 6)
     }
 }
 
