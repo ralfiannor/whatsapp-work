@@ -8,6 +8,21 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Planned
+
+- Appearance preferences (themes, typography) and adaptive member panel.
+- Accessibility pass (VoiceOver, contrast) and the pending manual
+  validation checklist.
+- UI performance baseline on a live account (Instruments: cold start,
+  chat switch, scroll) — the gate before further visual changes.
+- Mute / pin / archive wiring (columns exist, no UI yet).
+- Signed & notarized builds (until then, releases are ad-hoc signed;
+  see each release's install notes).
+- Per-chat notification rules, media cache management UI, inbox-zero
+  refinements, audio waveform thumbnails.
+
+## [0.3.2] - 2026-11-02
+
 ### Changed
 
 - Lower idle CPU and memory on large accounts (measured on a 2018 Intel
@@ -34,19 +49,6 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 - After WhatsApp answers the business-name lookup with "rate-overlimit"
   (429), the core waits 24 h — across restarts — before asking again,
   instead of drawing another refusal on every launch.
-
-### Planned
-
-- Appearance preferences (themes, typography) and adaptive member panel.
-- Accessibility pass (VoiceOver, contrast) and the pending manual
-  validation checklist.
-- UI performance baseline on a live account (Instruments: cold start,
-  chat switch, scroll) — the gate before further visual changes.
-- Mute / pin / archive wiring (columns exist, no UI yet).
-- Signed & notarized builds (until then, releases are ad-hoc signed;
-  see each release's install notes).
-- Per-chat notification rules, media cache management UI, inbox-zero
-  refinements, audio waveform thumbnails.
 
 ## [0.3.1] - 2026-11-02
 
@@ -243,7 +245,8 @@ drift, SQL/performance, lifecycle state machines, adversarial input —
 - Unread counters: revoke decrements are idempotent across history
   replays; out-of-order read receipts cannot hide newer unread traffic.
 
-[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/ralfiannor/whatsapp-work/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ralfiannor/whatsapp-work/releases/tag/v0.2.0
