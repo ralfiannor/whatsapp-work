@@ -684,6 +684,9 @@ func (c *Client) UserNames(ctx context.Context, jids []string) (map[string]strin
 		return map[string]string{}, nil
 	}
 	infos, err := c.cli.GetUserInfo(ctx, parsed)
+	if errors.Is(err, whatsmeow.ErrIQRateOverLimit) {
+		return nil, fmt.Errorf("whatsapp: usync names: %w: %w", core.ErrRateLimited, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("whatsapp: usync names: %w", err)
 	}

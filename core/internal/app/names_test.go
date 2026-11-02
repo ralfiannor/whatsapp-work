@@ -8,10 +8,13 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/ralfiannor/whatsapp-work/internal/app"
 	"github.com/ralfiannor/whatsapp-work/internal/core"
+	"github.com/ralfiannor/whatsapp-work/internal/events"
 	"github.com/ralfiannor/whatsapp-work/internal/storage"
 )
 
@@ -175,4 +178,65 @@ func TestUsyncBusinessNamePass(t *testing.T) {
 	}
 	c, _ := st.GetChat(context.Background(), biz)
 	t.Fatalf("usync name not applied: %q", displayName(c))
+}
+
+// A rate-limited usync answer is remembered across launches: the next
+// launch skips the query instead of drawing another 429.
+func TestUsyncRateLimitBacksOffAcrossLaunches(t *testing.T) {
+	st, err := storage.Open(context.Background(), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	biz := "254700000003@s.whatsapp.net"
+	launch := func(fw *fakeWA) {
+		d := events.NewDispatcher()
+		a := app.New(nil, st, fw, d)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		if err := a.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		sub := subscribe(t, d, 16)
+		fw.loggedIn = true
+		fw.push(core.EventConnState{State: core.StateConnected})
+		fw.push(core.EventHistoryBatch{Chat: core.Chat{
+			JID: biz, Kind: core.KindDirect, DisplayName: "+254700000003",
+		}, Items: []core.Incoming{{Kind: core.IncomingNew, Message: core.Message{
+			MessageID: "b1", ChatJID: biz, SenderJID: biz,
+			Timestamp: 1700000100, Kind: core.KindText, Text: "service AC?", Source: "history",
+		}}}})
+		waitFor(t, sub, "chat.updated")
+	}
+	calls := func(fw *fakeWA) int {
+		fw.mu.Lock()
+		defer fw.mu.Unlock()
+		return fw.userNamesCalls
+	}
+
+	first := newFakeWA()
+	first.userNamesErr = fmt.Errorf("usync: %w", core.ErrRateLimited)
+	launch(first)
+	deadline := time.Now().Add(8 * time.Second)
+	for calls(first) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if calls(first) != 1 {
+		t.Fatalf("first launch usync calls = %d, want 1", calls(first))
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v, err := st.Setting(context.Background(), "usync_names_backoff_until"); err == nil && v != "" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	second := newFakeWA()
+	second.userNames = map[string]string{biz: "Sample AC Service"}
+	launch(second)
+	time.Sleep(4 * time.Second) // past the name-pass debounce
+	if n := calls(second); n != 0 {
+		t.Fatalf("relaunch inside the backoff queried usync %d times", n)
+	}
 }

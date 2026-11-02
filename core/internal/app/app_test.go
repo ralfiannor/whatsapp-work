@@ -47,7 +47,9 @@ type fakeWA struct {
 	links     int
 	loggedIn  bool
 	// usync directory answers (jid -> verified business name).
-	userNames map[string]string
+	userNames      map[string]string
+	userNamesErr   error
+	userNamesCalls int
 }
 
 type sentCall struct {
@@ -101,6 +103,10 @@ func (f *fakeWA) ResolveLIDs(ctx context.Context) map[string]string {
 func (f *fakeWA) UserNames(ctx context.Context, jids []string) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.userNamesCalls++
+	if f.userNamesErr != nil {
+		return nil, f.userNamesErr
+	}
 	out := map[string]string{}
 	for _, j := range jids {
 		if n, ok := f.userNames[j]; ok {

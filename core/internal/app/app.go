@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -829,11 +830,26 @@ func (a *App) resolveNames(ctx context.Context) {
 	}
 }
 
+// usyncBackoff is how long a rate-limited usync name pass stays off.
+const (
+	usyncBackoffKey = "usync_names_backoff_until"
+	usyncBackoff    = 24 * time.Hour
+)
+
 // usyncNamePass titles direct chats whose name never resolved (business
 // senders withhold push names) via the usync verified-name directory.
 func (a *App) usyncNamePass(ctx context.Context, log *slog.Logger, lidToPN map[string]string) {
 	if a.State() != core.StateConnected {
 		return
+	}
+	// A rate-limit answer is a signal to stop asking, across restarts: the
+	// pass runs once per launch, and on an account WhatsApp already throttles
+	// every launch used to send a query that drew another 429.
+	if v, err := a.store.Setting(ctx, usyncBackoffKey); err == nil {
+		if until, _ := strconv.ParseInt(v, 10, 64); time.Now().Unix() < until {
+			log.Info("names stage", "stage", "usync", "skipped", "rate-limit backoff", "until", until)
+			return
+		}
 	}
 	chats, err := a.store.ListChatsForNames(ctx)
 	if err != nil {
@@ -865,6 +881,14 @@ func (a *App) usyncNamePass(ctx context.Context, log *slog.Logger, lidToPN map[s
 	for i := 0; i < len(order); i += batch {
 		end := min(i+batch, len(order))
 		names, err := a.wa.UserNames(ctx, order[i:end])
+		if errors.Is(err, core.ErrRateLimited) {
+			until := time.Now().Add(usyncBackoff).Unix()
+			if err := a.store.SetSetting(ctx, usyncBackoffKey, strconv.FormatInt(until, 10)); err != nil {
+				a.ingestError("usync names: persist backoff", err)
+			}
+			log.Warn("names stage", "stage", "usync", "rate_limited_until", until)
+			return
+		}
 		if err != nil {
 			a.ingestError("usync names", err)
 			return // network trouble: stop, retry next launch

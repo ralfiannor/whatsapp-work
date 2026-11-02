@@ -126,3 +126,26 @@ func (s *Store) Close() error {
 	}
 	return errR
 }
+
+// Setting reads one app_settings value; ErrNotFound when unset.
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.r.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("storage: setting %s: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetSetting writes one app_settings value.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	if _, err := s.w.ExecContext(ctx, `
+		INSERT INTO app_settings (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+		return fmt.Errorf("storage: set setting %s: %w", key, err)
+	}
+	return nil
+}
