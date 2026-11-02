@@ -26,6 +26,7 @@ var migrations = []struct {
 	{13, "reopen baseline-done rows that are recent and still unread", migrationV13},
 	{14, "conversation-level snooze on chats", migrationV14},
 	{15, "pending-state index for the inbox query; drop superseded inbox indexes", migrationV15},
+	{16, "drop pending rows of chatter in groups not marked work", migrationV16},
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -483,4 +484,19 @@ CREATE INDEX IF NOT EXISTS idx_local_state_pending
 	ON local_message_state(message_id) WHERE done = 0;
 DROP INDEX IF EXISTS idx_messages_inbox;
 DROP INDEX IF EXISTS idx_messages_inbox_live;
+`
+
+// migrationV16: pending local-state rows now exist only for inbox-eligible
+// messages (a mention, a direct chat, or a work-marked group). v15 and live
+// ingest had opened one for EVERY live incoming row, so chatter in unmarked
+// groups — never shown, never Done-able — piled up in the pending set the
+// inbox query drives from (96% of it on a real account). Drop those rows;
+// rows carrying user state (starred) stay, and marking a group Work later
+// re-opens its recent unread backlog.
+const migrationV16 = `
+DELETE FROM local_message_state
+WHERE done = 0 AND starred = 0
+  AND message_id IN (
+    SELECT m.id FROM messages m JOIN chats c ON c.jid = m.chat_jid
+    WHERE c.kind = 'group' AND c.is_work = 0 AND m.has_mention = 0);
 `
