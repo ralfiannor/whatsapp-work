@@ -38,9 +38,9 @@ rules apply to every commit:
 ```
 apps/macos/   SwiftUI app (xcodegen project.yml → WhatsAppWork.xcodeproj)
 core/         Go module "github.com/ralfiannor/whatsapp-work" (cmd/whatsapp-core + internal/)
-scripts/      build-core.sh · make-icon.sh (+ icongen.swift) · smoke.sh
+scripts/      build-core.sh · make-icon.sh (+ icongen.swift) · smoke.sh · showcase/ (README video)
 dist/         build output (gitignored)
-docs/         architecture · protocol · schema · performance · audit
+docs/         architecture · protocol · schema · performance · audit · media/ (rendered showcase)
 ```
 
 ## Build, test, verify
