@@ -630,6 +630,7 @@ final class AppState: ObservableObject {
         }
         for (chat, rows) in byChat {
             guard var list = messagesByChat[chat] else { continue }
+            var changed = false
             for (rowID, m) in rows {
                 if let i = list.firstIndex(where: { $0.id == rowID }) {
                     if list[i] == m { continue } // unchanged row: no invalidation churn
@@ -638,7 +639,11 @@ final class AppState: ObservableObject {
                     list.append(m)
                     MessageTimelineOrder.sort(&list)
                 }
+                changed = true
             }
+            // Every write publishes and re-renders the window: skip it when
+            // the whole batch matched what the transcript already shows.
+            guard changed else { continue }
             messagesByChat[chat] = trimmedTranscript(list, for: chat)
         }
     }

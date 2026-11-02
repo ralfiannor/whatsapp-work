@@ -114,7 +114,13 @@ in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
   changes — stale caches shipped two visual bugs already).
 - A row holding `@EnvironmentObject` (or `@ObservedObject`) re-runs its
   body on EVERY `AppState` change — its `==` is never consulted. Pass rows
-  plain values, plus a plain `AppState` reference for actions (`ChatRow`).
+  plain values, plus a plain `AppState` reference for actions (`ChatRow`,
+  `MessageBubble` + `MessageBubble.Labels`, `IRCLineText`).
+- **Do not move `AppState` to `@Observable` while macOS 14 is supported.**
+  Tried 2026-11-02: SwiftUI on 14.x keeps a view's old observation tracking
+  until a property it read changes, so reads of rarely-changing state
+  (`contactNames`) pile up per re-render — `ObservationTracking` objects and
+  the registrar grew without bound, app footprint +8 MB/min under traffic.
 - No `@AppStorage` inside `AppState`: outside a view every read is a
   CFPreferences lookup. Keep a `@Published` copy and write the default in
   `didSet` (`focusMode` sat in the chat sort comparator: 24% of idle CPU).
