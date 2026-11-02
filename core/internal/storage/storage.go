@@ -37,11 +37,16 @@ func ensureOwnerOnly(path string) error {
 	return os.Chmod(path, 0o600)
 }
 
+// cache_size is per connection (1 writer + 4 readers): 4 MB each. On a real
+// 640k-message DB, 16 MB per connection bought no measurable latency (chat
+// page, FTS search, inbox) over 4 MB, yet held ~34 MB more in SQLite's
+// allocator — which keeps freed pages mapped, so a cache that filled once
+// stayed in the footprint for good. 2 MB began to cost (inbox +12%).
 const pragmas = "_pragma=busy_timeout(5000)" +
 	"&_pragma=journal_mode(WAL)" +
 	"&_pragma=synchronous(NORMAL)" +
 	"&_pragma=foreign_keys(ON)" +
-	"&_pragma=cache_size(-16000)"
+	"&_pragma=cache_size(-4000)"
 
 // Store owns the app.db handles.
 type Store struct {
