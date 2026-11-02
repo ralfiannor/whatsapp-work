@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WhatsApp Work showcase</title>
+<!--
+  Source of docs/media/showcase.mp4. Every frame is a pure function of time:
+  seek(t) poses the whole stage, render.mjs captures it frame by frame.
+  Open this file in a browser to scrub the timeline.
+  All people, groups, numbers and messages are fictional.
+-->
+<style>
+:root {
+  --ink: #1c2330; --ink2: #4b5565; --muted: #7b8595;
+  --bg: #f6f8fa;
+  --teal: #0fb59a; --blue: #2a7fe2;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, monospace;
+  /* dark app chrome, matched to the app in macOS dark mode */
+  --d-side: #2b2b2d; --d-main: #1f1f21; --d-line: #38383c; --d-row: #2f2f32;
+  --d-text: #ececee; --d-muted: #9d9da4; --d-seg: #3a3a3e; --d-segon: #66666c;
+  --d-accent: #14a58c; --d-red: #c0343a; --d-star: #f5c518; --d-brief: #f0a23a;
+}
+html, body { margin: 0; background: #0d0f12; }
+#stage {
+  position: relative; width: 1280px; height: 720px; overflow: hidden;
+  background: var(--bg); font-family: var(--sans); color: var(--ink);
+  transform-origin: 0 0; -webkit-font-smoothing: antialiased;
+}
+.scene { position: absolute; inset: 0; visibility: hidden; }
+.abs { position: absolute; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.ic { display: inline-block; width: 1em; height: 1em; flex: none; }
+.accent {
+  background: linear-gradient(90deg, #10b49a 0%, #12a3b0 45%, #2a7fe2 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.caret {
+  display: inline-block; width: 4px; height: 0.95em; margin-left: 6px;
+  background: var(--ink); vertical-align: -0.12em; border-radius: 2px;
+}
+.cap {
+  position: absolute; left: 50%; top: 50%; white-space: nowrap;
+  font-size: 62px; letter-spacing: -0.028em; font-weight: 400;
+}
+
+/* soft background light */
+#bg { position: absolute; inset: 0; }
+.blob { position: absolute; border-radius: 50%; }
+.b1 { width: 760px; height: 760px; background: radial-gradient(closest-side, rgba(45, 212, 176, .26), rgba(45, 212, 176, 0)); }
+.b2 { width: 820px; height: 820px; background: radial-gradient(closest-side, rgba(96, 165, 250, .26), rgba(96, 165, 250, 0)); }
+.b3 { width: 640px; height: 640px; background: radial-gradient(closest-side, rgba(167, 139, 250, .18), rgba(167, 139, 250, 0)); }
+
+/* keycaps */
+.key {
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px;
+  box-sizing: border-box; color: var(--ink); font-weight: 500;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f5f6 100%);
+  border: 1px solid #dde5ea;
+}
+#i-key {
+  min-width: 96px; height: 66px; padding: 0 18px; border-radius: 18px; font-size: 31px;
+  box-shadow: inset 0 -3px 0 #d6e0e5, 0 10px 24px rgba(20, 50, 70, .12), 0 2px 4px rgba(20, 50, 70, .08);
+}
+
+/* dark app chrome */
+.dk {
+  background: var(--d-side); color: var(--d-text); border-radius: 20px; overflow: hidden;
+  box-shadow: 0 40px 90px rgba(10, 30, 45, .28), 0 0 0 1px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(255, 255, 255, .07);
+}
+.mono { font-family: var(--mono); }
+.seg { display: flex; background: var(--d-seg); border-radius: 8px; padding: 2px; }
+.seg span { flex: 1; text-align: center; border-radius: 6px; color: #e9e9ec; }
+.seg .on { background: var(--d-segon); }
+.lbl { color: var(--d-text); }
+.hash { color: var(--d-muted); font-weight: 400; margin-right: .35em; }
+.star { color: var(--d-star); }
+.brief { color: var(--d-brief); }
+.badge {
+  display: inline-block; background: var(--d-red); color: #fff; border-radius: 99px;
+  font-family: var(--mono); font-weight: 700; padding: 0 .45em; line-height: 1.45;
+}
+.mbadge { background: rgba(20, 165, 140, .28); color: #5fe0c6; }
+.av {
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 50%;
+  color: #fff; font-weight: 600; flex: none; background: var(--c);
+}
+.tl { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+/* ---- intro window ---- */
+#i-win { left: 120px; top: 58px; width: 1040px; height: 604px; border-radius: 14px; display: flex; }
+#i-win .side { width: 330px; background: var(--d-side); border-right: 1px solid #1a1a1c; display: flex; flex-direction: column; }
+#i-win .top { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+#i-win .top .ic { width: 18px; height: 18px; color: var(--d-muted); margin-left: 18px; }
+#i-win .ctl { display: flex; align-items: center; gap: 8px; padding: 2px 12px 10px; font-size: 13px; border-bottom: 1px solid var(--d-line); }
+#i-win .ctl .seg { flex: 1; font-size: 12.5px; }
+#i-win .ctl .seg span { padding: 3px 0; }
+#i-win .ctl .moon { width: 17px; height: 17px; color: var(--d-accent); }
+.ibh { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 10px 14px 4px; }
+.ibh .ic { width: 14px; height: 14px; }
+.ibr { display: flex; gap: 10px; padding: 7px 14px; align-items: flex-start; }
+.ibr .av { width: 28px; height: 28px; font-size: 11px; }
+.ibr .m { flex: 1; min-width: 0; }
+.ibr .n { display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }
+.ibr .n .x { color: var(--d-muted); font-weight: 500; font-size: 11.5px; }
+.ibr .n .t { margin-left: auto; color: var(--d-muted); font-weight: 400; font-size: 11px; font-family: var(--mono); }
+.ibr .d { font-size: 12px; color: var(--d-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+#i-win .main { flex: 1; background: var(--d-main); display: flex; flex-direction: column; min-width: 0; }
+.thead { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-weight: 700; border-bottom: 1px solid var(--d-line); }
+.thead .cnt { color: var(--d-muted); font-weight: 400; }
+.thead .aa { margin-left: auto; font-family: var(--sans); font-weight: 500; color: var(--d-text); }
+.thead .ic { color: var(--d-muted); }
+#i-win .thead { height: 52px; padding: 0 18px; font-size: 15px; }
+#i-win .thead .aa { font-size: 13px; }
+#i-win .thead .ic { width: 20px; height: 20px; }
+.trow { display: grid; gap: 12px; border-bottom: 1px solid #2c2c2f; font-family: var(--mono); }
+.trow .tm { color: var(--d-muted); }
+.trow .nk { text-align: right; font-weight: 600; white-space: nowrap; }
+.trow .q { color: var(--d-muted); }
+.trow .q b { color: var(--d-muted); font-style: italic; }
+#i-win .trow { grid-template-columns: 44px 70px 1fr; padding: 8px 18px; font-size: 12.5px; line-height: 1.55; }
+.trow.ment { background: rgba(20, 165, 140, .14); box-shadow: inset 3px 0 0 var(--d-accent); }
+.mtok { color: #5fe0c6; font-weight: 600; }
+.comp { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--d-line); background: #262628; }
+.comp .field { flex: 1; background: #303033; border-radius: 8px; color: var(--d-muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; }
+.comp .snd { border-radius: 8px; background: #3a3a3e; display: flex; align-items: center; justify-content: center; color: var(--d-muted); }
+#i-win .comp { margin-top: auto; padding: 12px 16px; }
+#i-win .comp > .ic { width: 18px; height: 18px; color: var(--d-muted); }
+#i-win .comp .field { padding: 9px 12px; font-size: 13px; }
+#i-win .comp .snd { width: 40px; height: 32px; }
+#i-win .comp .snd .ic { width: 16px; height: 16px; }
+
+/* ---- search ---- */
+#s-pill {
+  left: 140px; top: 296px; width: 1000px; height: 128px; box-sizing: border-box; border-radius: 64px;
+  display: flex; align-items: center; gap: 26px; padding: 0 48px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .92), rgba(240, 246, 250, .86));
+  box-shadow: 0 24px 70px rgba(30, 70, 100, .14), inset 0 0 0 1px rgba(255, 255, 255, .95), 0 0 0 1px rgba(150, 180, 200, .25);
+  font-size: 58px; letter-spacing: -0.025em; transform-origin: 50% 50%;
+}
+#s-pill > .ic { width: 46px; height: 46px; color: var(--muted); }
+#s-pill .k { margin-left: auto; font-size: 26px; color: var(--muted); border: 1px solid #d9e2e8; border-radius: 14px; padding: 6px 14px; background: #fff; }
+#s-card { left: 250px; top: 118px; width: 780px; height: 484px; background: #232325; transform-origin: 50% 0; }
+#s-card .in { display: flex; align-items: center; gap: 14px; height: 66px; padding: 0 22px; border-bottom: 1px solid var(--d-line); font-size: 22px; }
+#s-card .in .ic { width: 22px; height: 22px; color: var(--d-muted); }
+#s-card .in .esc { margin-left: auto; font-size: 13px; color: var(--d-muted); border: 1px solid #47474c; border-radius: 6px; padding: 2px 8px; }
+#s-card .gh { font-size: 11.5px; font-weight: 600; letter-spacing: .08em; color: var(--d-muted); padding: 14px 22px 6px; }
+.res { padding: 10px 22px; margin: 0 10px; border-radius: 10px; }
+.res .h { display: flex; align-items: baseline; font-family: var(--mono); font-size: 15px; font-weight: 700; }
+.res .h .t { margin-left: auto; color: var(--d-muted); font-weight: 400; font-size: 13px; }
+.res .b { font-family: var(--mono); font-size: 14.5px; color: #c9c9ce; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+mark { background: rgba(20, 200, 170, .22); color: #7ff0d8; border-radius: 3px; padding: 0 2px; }
+#s-card .foot { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 22px; border-top: 1px solid var(--d-line); font-size: 13px; color: var(--d-muted); }
+#s-card .foot .ic { width: 15px; height: 15px; }
+
+/* ---- focus ---- */
+#f-card { left: 110px; top: 62px; width: 600px; height: 596px; }
+#f-card .ctl { display: flex; align-items: center; gap: 12px; padding: 22px 22px 0; font-size: 17px; }
+#f-card .ctl .seg { flex: 1; font-size: 16px; }
+#f-card .ctl .seg span { padding: 5px 0; }
+#f-moon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--d-muted); }
+#f-moon .ic { width: 26px; height: 26px; }
+#f-card .flt { padding: 12px 22px 14px; border-bottom: 1px solid var(--d-line); }
+.crow { padding: 8px 22px; font-family: var(--mono); }
+.crow .a { display: flex; align-items: center; gap: 8px; font-weight: 700; white-space: nowrap; }
+.crow .a .ic { width: .85em; height: .85em; }
+.crow .a .sp { margin-left: auto; display: flex; gap: 6px; }
+.crow .b { display: flex; color: var(--d-muted); margin-top: 3px; white-space: nowrap; }
+.crow .b span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.crow .b span:last-child { margin-left: 14px; }
+#f-card .crow { font-size: 17px; }
+#f-card .crow .b { font-size: 15px; }
+#f-copy { left: 770px; top: 172px; width: 440px; }
+#f-copy h2 { margin: 0; font-size: 54px; font-weight: 600; letter-spacing: -0.03em; }
+#f-copy p { margin: 12px 0 0; font-size: 23px; color: var(--ink2); line-height: 1.35; }
+.chipk { display: inline-flex; align-items: center; gap: 10px; margin-top: 22px; font-size: 18px; color: var(--ink2); }
+.chipk b { font-weight: 500; background: #fff; border: 1px solid #dbe3e8; border-radius: 10px; padding: 5px 12px; box-shadow: inset 0 -2px 0 #e1e8ec; color: var(--ink); }
+.toast {
+  width: 430px; box-sizing: border-box; display: flex; gap: 12px; align-items: center; padding: 12px 14px;
+  background: rgba(255, 255, 255, .86); border-radius: 18px;
+  box-shadow: 0 14px 40px rgba(30, 60, 90, .14), 0 0 0 1px rgba(160, 180, 200, .25);
+}
+.toast img { width: 38px; height: 38px; border-radius: 9px; }
+.toast .tt { font-size: 15px; font-weight: 600; font-family: var(--mono); }
+.toast .tb { font-size: 14.5px; color: var(--ink2); margin-top: 2px; }
+.toast .tag { margin-left: auto; align-self: flex-start; font-size: 12px; font-weight: 600; border-radius: 99px; padding: 3px 9px; white-space: nowrap; }
+
+/* ---- inbox ---- */
+#n-card { left: 230px; top: 44px; width: 820px; height: 632px; }
+#n-card .ctl { display: flex; align-items: center; gap: 12px; padding: 22px 26px 16px; font-size: 17px; border-bottom: 1px solid var(--d-line); }
+#n-card .ctl .seg { flex: 1; font-size: 16px; }
+#n-card .ctl .seg span { padding: 5px 0; }
+#n-card .ctl .moon { width: 24px; height: 24px; color: var(--d-accent); }
+#n-list { position: absolute; left: 0; right: 0; top: 78px; bottom: 0; }
+#n-list > div { position: absolute; left: 0; right: 0; }
+#n-card .ibh { font-size: 15px; padding: 14px 26px 6px; }
+#n-card .ibh .ic { width: 17px; height: 17px; }
+#n-card .ibr { padding: 10px 26px; gap: 14px; align-items: center; height: 84px; box-sizing: border-box; }
+#n-card .ibr .av { width: 44px; height: 44px; font-size: 16px; }
+#n-card .ibr .n { font-size: 18.5px; }
+#n-card .ibr .n .x { font-size: 15px; }
+#n-card .ibr .n .t { font-size: 14px; margin-left: 10px; }
+#n-card .ibr .d { font-size: 16px; margin-top: 4px; }
+.rbtn { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--d-muted); background: #38383c; flex: none; }
+.rbtn .ic { width: 22px; height: 22px; }
+.done-row { opacity: .7; }
+.done-row .n span:first-child { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, .35); }
+.reopen { font-size: 13px; color: var(--d-muted); border: 1px solid #4a4a4f; border-radius: 99px; padding: 3px 10px; }
+#n-menu {
+  position: absolute; width: 330px; padding: 6px; box-sizing: border-box; border-radius: 12px;
+  background: rgba(52, 52, 56, .97); color: var(--d-text); font-size: 15px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .09);
+  transform-origin: 90% 0;
+}
+#n-menu .mi { padding: 7px 12px; border-radius: 7px; }
+#n-menu .sep { height: 1px; background: rgba(255, 255, 255, .1); margin: 5px 8px; }
+#n-toast { right: 22px; top: 92px; font-size: 14px; color: #c8f5ea; background: rgba(20, 165, 140, .25); border: 1px solid rgba(20, 200, 170, .35); border-radius: 99px; padding: 6px 14px; display: flex; gap: 8px; align-items: center; }
+#n-toast .ic { width: 16px; height: 16px; }
+
+/* ---- mentions ---- */
+#m-card { left: 170px; top: 104px; width: 940px; height: 500px; background: var(--d-main); }
+#m-card .thead { height: 66px; padding: 0 26px; font-size: 20px; }
+#m-card .thead .aa { font-size: 16px; }
+#m-card .thead .ic { width: 24px; height: 24px; }
+#m-card .trow { grid-template-columns: 62px 96px 1fr; padding: 12px 26px; font-size: 17.5px; line-height: 1.55; }
+#m-own .st { color: var(--d-muted); margin-left: 10px; }
+#m-card .comp { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 22px; }
+#m-card .comp > .ic { width: 24px; height: 24px; color: var(--d-muted); }
+#m-field { padding: 14px 18px; font-size: 21px; color: var(--d-text) !important; }
+#m-field .ph { color: var(--d-muted); }
+#m-card .comp .snd { width: 54px; height: 46px; }
+#m-card .comp .snd .ic { width: 22px; height: 22px; }
+#m-pop {
+  position: absolute; width: 360px; padding: 6px; box-sizing: border-box; border-radius: 12px;
+  background: rgba(50, 50, 54, .98); box-shadow: 0 18px 50px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .09);
+  font-family: var(--mono); font-size: 17px; transform-origin: 10% 100%;
+}
+#m-pop .r { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; }
+#m-pop .r .av { width: 26px; height: 26px; font-size: 11px; font-family: var(--sans); }
+#m-pop .r .role { margin-left: auto; color: var(--d-muted); font-size: 14px; }
+#m-pop .r.on { background: rgba(20, 165, 140, .3); }
+.kc { position: absolute; display: flex; align-items: center; justify-content: center; width: 64px; height: 56px; border-radius: 14px; font-size: 28px;
+  background: linear-gradient(180deg, #fff, #eef3f5); border: 1px solid #dde5ea; box-shadow: inset 0 -3px 0 #d6e0e5, 0 10px 24px rgba(20, 50, 70, .16); color: var(--ink); }
+
+/* ---- capsules ---- */
+.cap-s { position: absolute; height: 112px; border-radius: 56px; }
+.cap-c { position: absolute; width: 112px; height: 112px; border-radius: 50%; }
+
+/* ---- groups ---- */
+#g-title { left: 96px; top: 58px; font-size: 46px; letter-spacing: -0.028em; }
+#g-log { left: 96px; top: 136px; width: 780px; height: 520px; background: var(--d-main); }
+#g-log .thead { height: 58px; padding: 0 24px; font-size: 18px; }
+#g-log .thead .ic { width: 22px; height: 22px; margin-left: auto; }
+#g-log .trow { grid-template-columns: 58px 82px 1fr; padding: 10px 24px; font-size: 16.5px; line-height: 1.5; }
+#g-mem { left: 900px; top: 136px; width: 300px; height: 520px; }
+#g-mem .hd { display: flex; align-items: baseline; gap: 10px; padding: 18px 20px 12px; font-size: 18px; font-weight: 600; border-bottom: 1px solid var(--d-line); }
+#g-mem .hd span { color: var(--d-muted); font-weight: 400; font-family: var(--mono); font-size: 15px; }
+#g-mem .hd em { margin-left: auto; font-style: normal; font-size: 14px; color: var(--d-muted); font-weight: 400; }
+.mrow { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 46px; font-family: var(--mono); font-size: 16px; font-weight: 600; }
+.mrow .role { margin-left: auto; font-size: 12.5px; font-weight: 500; color: var(--d-muted); border: 1px solid #4a4a4f; border-radius: 99px; padding: 1px 8px; }
+.mrow .adm { color: var(--d-star); width: 14px; }
+#g-prof { left: 586px; top: 300px; width: 300px; box-sizing: border-box; padding: 20px; background: #303033; border-radius: 16px; transform-origin: 100% 30%; }
+#g-prof .top { display: flex; gap: 14px; align-items: center; }
+#g-prof .av { width: 58px; height: 58px; font-size: 21px; }
+#g-prof .nm { font-size: 20px; font-weight: 600; }
+#g-prof .sub { font-size: 13.5px; color: var(--d-muted); margin-top: 3px; }
+#g-prof .ph { font-family: var(--mono); font-size: 14px; color: #c9c9ce; margin-top: 16px; line-height: 1.6; }
+#g-prof .ph span { color: var(--d-muted); }
+#g-prof .bt { display: flex; gap: 10px; margin-top: 16px; }
+#g-prof .bt span { flex: 1; text-align: center; border-radius: 9px; padding: 8px 0; font-size: 14.5px; font-weight: 600; background: #444449; }
+#g-prof .bt span:first-child { background: var(--d-accent); color: #fff; }
+
+/* ---- notes ---- */
+#o-card { left: 290px; top: 196px; width: 700px; height: 420px; background: var(--d-main); }
+#o-card .hd { display: flex; align-items: center; gap: 12px; padding: 0 26px; height: 66px; border-bottom: 1px solid var(--d-line); font-size: 21px; font-weight: 600; }
+#o-card .hd > .ic { width: 24px; height: 24px; color: var(--d-star); }
+#o-card .hd .seg { margin-left: auto; width: 190px; font-size: 14.5px; font-weight: 500; }
+#o-card .hd .seg span { padding: 4px 0; }
+#o-card .bd { padding: 18px 30px; font-size: 20px; }
+#o-card .h2 { font-size: 15px; font-weight: 700; letter-spacing: .06em; color: var(--d-muted); text-transform: uppercase; margin-bottom: 8px; }
+.ck { display: flex; align-items: center; gap: 14px; height: 46px; }
+.ck .cb { width: 24px; height: 24px; border-radius: 7px; box-sizing: border-box; border: 2px solid #6a6a70; display: flex; align-items: center; justify-content: center; color: #fff; }
+.ck .cb .ic { width: 18px; height: 18px; }
+.ck .tx { position: relative; }
+.ck .sl { position: absolute; left: -2px; top: 54%; height: 2px; background: var(--d-muted); border-radius: 1px; }
+#o-card .p { margin-top: 14px; color: #c9c9ce; font-size: 18.5px; }
+#o-card .ft { position: absolute; left: 0; right: 0; bottom: 0; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 26px; border-top: 1px solid var(--d-line); color: var(--d-muted); font-size: 15px; }
+#o-card .ft .ic { width: 17px; height: 17px; }
+
+/* ---- performance ---- */
+.grad { background: radial-gradient(1200px 600px at 20% 0%, rgba(255, 255, 255, .18), rgba(255, 255, 255, 0)), linear-gradient(115deg, #0a9c8c 0%, #11b39f 28%, #1a8fe0 72%, #3b6cf0 100%); }
+#p-bg { position: absolute; inset: 0; }
+.bar { position: absolute; width: 22px; border-radius: 11px; background: #fff; }
+.stat { position: absolute; top: 262px; width: 360px; text-align: center; color: #fff; }
+.stat b { display: block; font-size: 88px; font-weight: 600; letter-spacing: -0.035em; line-height: 1; }
+.stat span { display: block; margin-top: 16px; font-size: 21px; opacity: .88; line-height: 1.35; }
+#p-foot { left: 0; right: 0; top: 600px; text-align: center; color: rgba(255, 255, 255, .78); font-size: 16px; }
+
+/* ---- keys ---- */
+#k-title { left: 0; right: 0; top: 140px; text-align: center; font-size: 56px; letter-spacing: -0.03em; }
+.kw { position: absolute; top: 300px; width: 150px; text-align: center; }
+.kw .key { width: 150px; height: 112px; border-radius: 26px; font-size: 40px; }
+.kw .l { margin-top: 18px; font-size: 20px; color: var(--ink2); }
+
+/* ---- native ---- */
+.strike { position: relative; }
+.strike .sl { position: absolute; left: -4px; top: 55%; height: 5px; background: #e5484d; border-radius: 3px; }
+.chips { position: absolute; left: 0; right: 0; top: 430px; display: flex; justify-content: center; gap: 16px; }
+.chips span { font-size: 24px; color: var(--ink2); background: rgba(255, 255, 255, .8); border: 1px solid #dce4ea; border-radius: 99px; padding: 9px 20px; box-shadow: 0 6px 18px rgba(30, 60, 90, .08); }
+
+/* ---- ending ---- */
+#fw-text { font-size: 76px; }
+#gl-wrap { position: absolute; left: 0; right: 0; top: 292px; height: 130px; }
+.gl { position: absolute; left: 0; right: 0; text-align: center; font-size: 104px; font-weight: 600; letter-spacing: -0.035em; color: #fff; }
+#gl-sub { left: 0; right: 0; top: 448px; text-align: center; color: rgba(255, 255, 255, .9); font-size: 24px; }
+#e-bg { position: absolute; inset: 0; background: #fbfcfd; }
+#e-icon { left: 580px; top: 150px; width: 120px; height: 120px; }
+#e-name { left: 0; right: 0; top: 300px; text-align: center; font-size: 54px; font-weight: 600; letter-spacing: -0.03em; }
+#e-tag { left: 0; right: 0; top: 378px; text-align: center; font-size: 22px; color: var(--ink2); }
+#e-url { left: 0; right: 0; top: 436px; text-align: center; }
+#e-url span { font-family: var(--mono); font-size: 19px; color: #0b8f80; background: rgba(15, 181, 154, .1); border: 1px solid rgba(15, 181, 154, .3); border-radius: 99px; padding: 9px 20px; }
+#e-foot { left: 0; right: 0; top: 636px; text-align: center; font-size: 15.5px; color: var(--muted); }
+
+/* cursor */
+#cursor { position: absolute; left: 0; top: 0; width: 34px; height: 48px; transform-origin: 3px 3px; z-index: 50; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .3)); }
+#ripple { position: absolute; left: 0; top: 0; border-radius: 50%; border: 3px solid rgba(15, 181, 154, .9); box-sizing: border-box; z-index: 49; }
+
+/* preview controls (hidden when rendering) */
+#ui { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #15181d; color: #cfd6de; font: 13px var(--mono); }
+#ui input { flex: 1; }
+#ui button { font: inherit; background: #2a3038; color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; }
+.render #ui { display: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+
+  <!-- 1 · intro: "Meet your ⌘4 work inbox" → the app window -->
+  <section class="scene" id="intro">
+    <div id="i-line" class="abs" style="left:0;right:0;top:318px;height:84px;display:flex;align-items:center;justify-content:center;gap:24px;font-size:60px;letter-spacing:-0.028em">
+      <span id="i-w1">Meet your</span>
+      <span id="i-key" class="key">⌘4</span>
+      <span id="i-w2" class="accent">work inbox</span>
+    </div>
+    <div id="i-ring" class="abs" style="left:480px;top:251px;width:320px;height:218px;border-radius:64px;border:4px solid rgba(15,181,154,.8);box-sizing:border-box"></div>
+    <div id="i-fkey" class="abs key" style="left:477px;top:248px;width:326px;height:224px;border-radius:61px;font-size:105px;box-shadow:inset 0 -10px 0 #d6e0e5,0 34px 80px rgba(20,50,70,.14),0 6px 14px rgba(20,50,70,.08)">⌘4</div>
+    <div id="i-win" class="abs dk">
+      <div class="side">
+        <div class="top"><span class="tl" style="background:#ff5f57"></span><span class="tl" style="background:#febc2e"></span><span class="tl" style="background:#28c840"></span><i class="ic" data-i="sidebar"></i></div>
+        <div class="ctl"><span class="lbl">Sidebar</span><div class="seg"><span>Chats</span><span class="on" id="w-inbox">Inbox</span></div><i class="ic moon" data-i="moonf"></i></div>
+        <div class="ibh stg" style="color:#ff6b6b"><i class="ic" data-i="at"></i>Mentions — 2</div>
+        <div class="ibr stg"><span class="av" style="--c:#3f8f5a">DR</span><div class="m"><div class="n"><span>Design Review</span><span class="x">×2</span><span class="t">11:12</span></div><div class="d">Kai: @you can you check the v2 mockups?</div></div></div>
+        <div class="ibr stg"><span class="av" style="--c:#3b6fb0">OT</span><div class="m"><div class="n"><span>Ops Team</span><span class="x">×1</span><span class="t">10:58</span></div><div class="d">Dimas: @you deploy window moved to 14:00</div></div></div>
+        <div class="ibh stg" style="color:#f0a23a"><i class="ic" data-i="brief"></i>Work Groups — 1</div>
+        <div class="ibr stg"><span class="av" style="--c:#8a5cc0">FO</span><div class="m"><div class="n"><span>Finance Ops</span><span class="x">×3</span><span class="t">10:41</span></div><div class="d">Maya: March invoice approved, paying today</div></div></div>
+        <div class="ibh stg" style="color:#2fc9a8"><i class="ic" data-i="person"></i>Direct — 2</div>
+        <div class="ibr stg"><span class="av" style="--c:#b0517d">RH</span><div class="m"><div class="n"><span>Rina Hartono</span><span class="x">×1</span><span class="t">10:30</span></div><div class="d">Can we move the call to tomorrow?</div></div></div>
+        <div class="ibr stg"><span class="av" style="--c:#2a8f9a">SA</span><div class="m"><div class="n"><span>Sample AC Service</span><span class="x">×1</span><span class="t">09:40</span></div><div class="d">Technician arrives at 10:00</div></div></div>
+      </div>
+      <div class="main">
+        <div class="thead"><span><span class="hash">#</span>Design Review</span><span class="cnt">12</span><span class="aa">AA ⌄</span><i class="ic" data-i="people"></i></div>
+        <div class="trow stg"><span class="tm">11:02</span><span class="nk" style="color:#b48ae0">Maya</span><span>v2 mockups are in the shared folder</span></div>
+        <div class="trow stg"><span class="tm">11:05</span><span class="nk" style="color:#5b8fe0">Dimas</span><div><div class="q">↩ <b>Maya</b>: v2 mockups are in the shared folder</div>the sidebar spacing feels much better</div></div>
+        <div class="trow stg"><span class="tm">11:09</span><span class="nk" style="color:#4fb06a">Kai</span><span>left two comments on the inbox screen</span></div>
+        <div class="trow stg ment" id="i-ment"><span class="tm">11:12</span><span class="nk" style="color:#4fb06a">Kai</span><span><span class="mtok">@you</span> can you check the v2 mockups before 15:00?</span></div>
+        <div class="comp"><i class="ic" data-i="clip"></i><div class="field">Message…</div><div class="snd"><i class="ic" data-i="send"></i></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · caption -->
+  <section class="scene" id="cap1"><div class="cap"></div></section>
+
+  <!-- 3 · search -->
+  <section class="scene" id="search">
+    <div id="s-pill" class="abs"><i class="ic" data-i="search"></i><span id="s-text"></span><span class="k">⌘K</span></div>
+    <div id="s-card" class="abs dk">
+      <div class="in"><i class="ic" data-i="search"></i><span>invoice march</span><span class="esc">esc</span></div>
+      <div class="gh stg">MESSAGES</div>
+      <div class="res stg" id="s-r1"><div class="h"><span><span class="hash">#</span>Finance Ops</span><span class="t">Mar 28</span></div><div class="b">Maya: the <mark>March</mark> <mark>invoice</mark> is approved, paying today</div></div>
+      <div class="res stg"><div class="h"><span><span class="hash">@</span><span style="color:#3fb0bf">Sample AC Service</span></span><span class="t">Mar 15</span></div><div class="b"><mark>Invoice</mark> #2041 · service visit on 14 <mark>March</mark></div></div>
+      <div class="res stg"><div class="h"><span><span class="hash">#</span>Ops Team</span><span class="t">Mar 31</span></div><div class="b">Dimas: uploaded the <mark>March</mark> <mark>invoice</mark> batch to the drive</div></div>
+      <div class="gh stg">CHATS</div>
+      <div class="res stg"><div class="h"><span><span class="hash">#</span><mark>Invoices</mark> — <mark>March</mark> close</span><span class="t">8 members</span></div></div>
+      <div class="foot"><i class="ic" data-i="lock"></i>SQLite FTS5 · on this Mac · works offline</div>
+    </div>
+  </section>
+
+  <!-- 4 · caption -->
+  <section class="scene" id="cap2"><div class="cap"></div></section>
+
+  <!-- 5 · focus mode -->
+  <section class="scene" id="focus">
+    <div id="f-card" class="abs dk">
+      <div class="ctl"><span class="lbl">Sidebar</span><div class="seg"><span class="on">Chats</span><span>Inbox</span></div><div id="f-moon"><i class="ic" data-i="moon"></i></div></div>
+      <div class="ctl flt" style="padding-top:12px"><span class="lbl">Filter</span><div class="seg"><span class="on">All</span><span>Unread</span><span>Mentions</span></div></div>
+      <div class="crow fr" data-w="1"><div class="a"><span class="hash">#</span>Ops Team<i class="ic star" data-i="star"></i><i class="ic brief" data-i="brieff"></i><span class="sp"><span class="badge">3</span></span></div><div class="b"><span>Dimas: deploy window moved to 14:00</span><span>11:41</span></div></div>
+      <div class="crow fr" data-w="1"><div class="a"><span class="hash">@</span><span style="color:#e07aa8">Rina Hartono</span><i class="ic star" data-i="star"></i><span class="sp"><span class="badge">1</span></span></div><div class="b"><span>Can we move the call to tomorrow?</span><span>11:30</span></div></div>
+      <div class="crow fr" data-w="0"><div class="a"><span class="hash">#</span>Weekend Hikers ⛺<span class="sp"><span class="badge">12</span></span></div><div class="b"><span>Bimo: who's bringing the tent?</span><span>11:20</span></div></div>
+      <div class="crow fr" data-w="1"><div class="a"><span class="hash">#</span>Design Review<i class="ic brief" data-i="brieff"></i><span class="sp"><span class="badge mbadge">@1</span><span class="badge">2</span></span></div><div class="b"><span>Kai: @you can you check the v2 mockups?</span><span>11:12</span></div></div>
+      <div class="crow fr" data-w="0"><div class="a"><span class="hash">#</span>Family<span class="sp"><span class="badge">5</span></span></div><div class="b"><span>Mom: dinner at 7? 🍝</span><span>10:55</span></div></div>
+      <div class="crow fr" data-w="1"><div class="a"><span class="hash">@</span><span style="color:#3fb0bf">Sample AC Service</span><i class="ic star" data-i="star"></i></div><div class="b"><span>Technician arrives at 10:00</span><span>09:40</span></div></div>
+      <div class="crow fr" data-w="0"><div class="a"><span class="hash">#</span>Memes 🐸<span class="sp"><span class="badge">52</span></span></div><div class="b"><span>📷 Photo</span><span>09:36</span></div></div>
+    </div>
+    <div id="f-copy" class="abs">
+      <h2>Focus Mode</h2>
+      <p>Only work chats can reach you.<br>Everything else waits.</p>
+      <div class="chipk"><b>⌘⇧F</b> or the moon in the sidebar</div>
+    </div>
+    <div id="f-t1" class="abs toast" style="left:770px;top:430px"><img src="../../apps/macos/icon-source.png" alt=""><div><div class="tt"># Weekend Hikers</div><div class="tb">Bimo: who's bringing the tent?</div></div><span class="tag" style="background:#eceff3;color:#6b7684">Held by Focus</span></div>
+    <div id="f-t2" class="abs toast" style="left:770px;top:520px"><img src="../../apps/macos/icon-source.png" alt=""><div><div class="tt"># Ops Team</div><div class="tb">Dimas: deploy window moved to 14:00</div></div><span class="tag" style="background:rgba(15,181,154,.14);color:#0b8f80">Work</span></div>
+  </section>
+
+  <!-- 6 · work inbox -->
+  <section class="scene" id="inbox">
+    <div id="n-card" class="abs dk">
+      <div class="ctl"><span class="lbl">Sidebar</span><div class="seg"><span>Chats</span><span class="on">Inbox</span></div><i class="ic moon" data-i="moonf"></i></div>
+      <div id="n-list">
+        <div class="ibh" id="n-hm" style="color:#ff6b6b"><i class="ic" data-i="at"></i>Mentions — 1</div>
+        <div class="ibr" id="n-a"><span class="av" style="--c:#3f8f5a">DR</span><div class="m"><div class="n"><span>Design Review</span><span class="x">×2</span><span class="t">11:12</span></div><div class="d">Kai: @you can you check the v2 mockups before 15:00?</div></div><span class="rbtn bdone"><i class="ic" data-i="check"></i></span><span class="rbtn bclk"><i class="ic" data-i="clock"></i></span></div>
+        <div class="ibh" id="n-hw" style="color:#f0a23a"><i class="ic" data-i="brief"></i>Work Groups — 1</div>
+        <div class="ibr" id="n-c"><span class="av" style="--c:#3b6fb0">OT</span><div class="m"><div class="n"><span>Ops Team</span><span class="x">×3</span><span class="t">11:41</span></div><div class="d">Dimas: deploy window moved to 14:00</div></div><span class="rbtn"><i class="ic" data-i="check"></i></span><span class="rbtn"><i class="ic" data-i="clock"></i></span></div>
+        <div class="ibh" id="n-hd" style="color:#2fc9a8"><i class="ic" data-i="person"></i><span id="n-hdt">Direct — 2</span></div>
+        <div class="ibr" id="n-b"><span class="av" style="--c:#b0517d">RH</span><div class="m"><div class="n"><span>Rina Hartono</span><span class="x">×1</span><span class="t">11:30</span></div><div class="d">Can we move the call to tomorrow?</div></div><span class="rbtn"><i class="ic" data-i="check"></i></span><span class="rbtn bclk"><i class="ic" data-i="clock"></i></span></div>
+        <div class="ibr" id="n-d"><span class="av" style="--c:#2a8f9a">SA</span><div class="m"><div class="n"><span>Sample AC Service</span><span class="x">×1</span><span class="t">09:40</span></div><div class="d">Technician arrives at 10:00</div></div><span class="rbtn"><i class="ic" data-i="check"></i></span><span class="rbtn"><i class="ic" data-i="clock"></i></span></div>
+        <div class="ibh" id="n-hx" style="color:var(--d-muted)"><i class="ic" data-i="checkc"></i>Done — last 7 days</div>
+        <div class="ibr done-row" id="n-a2" style="height:64px"><span class="av" style="--c:#3f8f5a;width:34px;height:34px;font-size:13px">DR</span><div class="m"><div class="n"><span>Design Review</span><span class="x">×2</span></div></div><span class="reopen">Reopen</span></div>
+      </div>
+      <div id="n-menu">
+        <div class="mi">✓ Done — 1 item</div>
+        <div class="sep"></div>
+        <div class="mi">Snooze 1 hour</div>
+        <div class="mi" id="n-mi2">Snooze until tomorrow 09:00</div>
+        <div class="sep"></div>
+        <div class="mi">Open conversation</div>
+      </div>
+      <div id="n-toast" class="abs"><i class="ic" data-i="clock"></i>Snoozed until tomorrow 09:00</div>
+    </div>
+  </section>
+
+  <!-- 7 · caption -->
+  <section class="scene" id="cap3"><div class="cap"></div></section>
+
+  <!-- 8 · mentions + optimistic send -->
+  <section class="scene" id="mention">
+    <div id="m-card" class="abs dk">
+      <div class="thead"><span><span class="hash">#</span>Design Review</span><span class="cnt">12</span><span class="aa">AA ⌄</span><i class="ic" data-i="people"></i></div>
+      <div class="trow"><span class="tm">15:00</span><span class="nk" style="color:#b48ae0">Maya</span><span>launch page copy is in the doc</span></div>
+      <div class="trow"><span class="tm">15:01</span><span class="nk" style="color:#4fb06a">Kai</span><div><div class="q">↩ <b>Maya</b>: launch page copy is in the doc</div>looks good to me 👍</div></div>
+      <div class="trow" id="m-own"><span class="tm">15:02</span><span class="nk" style="color:#9a9aa6">you</span><span>Thanks! <span class="mtok">@Rina Hartono</span> can you review?<span class="st" id="m-st"></span></span></div>
+      <div class="comp"><i class="ic" data-i="clip"></i><div class="field" id="m-field"></div><div class="snd"><i class="ic" data-i="send"></i></div></div>
+      <div id="m-pop">
+        <div class="r on"><span class="av" style="--c:#b0517d">RH</span><span style="color:#e07aa8">Rina Hartono</span><span class="role">admin</span></div>
+        <div class="r"><span class="av" style="--c:#3b6fb0">RP</span><span style="color:#5b8fe0">Rizky Pratama</span></div>
+        <div class="r"><span class="av" style="--c:#a3762a">RI</span><span style="color:#d39b3a">Ririn</span></div>
+      </div>
+    </div>
+    <div id="m-k" class="kc">↩</div>
+  </section>
+
+  <!-- 9 · capsule transition -->
+  <section class="scene" id="caps">
+    <div class="cap-s" style="left:330px;top:124px;width:400px;background:linear-gradient(90deg,#cdf3ec,#62d6c6 45%,#8db8ff 75%,#dcb0ff)"></div>
+    <div class="cap-c" style="left:760px;top:124px;background:#8a4dff"></div>
+    <div class="cap-c" style="left:400px;top:304px;background:#0b6e8c"></div>
+    <div class="cap-s" style="left:540px;top:304px;width:420px;background:linear-gradient(90deg,#0a8f8f,#12b5a5 55%,#9be8db)"></div>
+    <div class="cap-s" style="left:330px;top:484px;width:360px;background:linear-gradient(90deg,#ff9f43,#f78fb3 40%,#c3b5ff 75%,#e6ecff)"></div>
+    <div class="cap-c" style="left:720px;top:484px;background:#d6e4ff"></div>
+  </section>
+
+  <!-- 10 · groups, IRC-style -->
+  <section class="scene" id="irc">
+    <div id="g-title" class="abs">Groups, <span class="accent">IRC-style</span></div>
+    <div id="g-log" class="abs dk">
+      <div class="thead"><span><span class="hash">#</span>Release Squad</span><span class="cnt">24</span><i class="ic" data-i="people"></i></div>
+      <div class="trow gl0"><span class="tm">10:01</span><span class="nk" style="color:#b48ae0">Maya</span><span>standup in 5, agenda is in the doc</span></div>
+      <div class="trow gl0"><span class="tm">10:01</span><span class="nk" style="color:#5b8fe0">Dimas</span><span>pushed the fix for the reconnect bug</span></div>
+      <div class="trow gl0"><span class="tm">10:02</span><span class="nk" style="color:#4fb06a">Kai</span><div><div class="q">↩ <b>Dimas</b>: pushed the fix for the reconnect bug</div>reviewing now</div></div>
+      <div class="trow gl0"><span class="tm">10:02</span><span class="nk" style="color:#e06464">Sari</span><span>QA build is green ✅</span></div>
+      <div class="trow gl0 ment"><span class="tm">10:03</span><span class="nk" style="color:#e07aa8">Rina</span><span><span class="mtok">@you</span> can you confirm the release notes?</span></div>
+      <div class="trow gl0"><span class="tm">10:03</span><span class="nk" style="color:#d39b3a">Ari</span><span>ship it 🚀</span></div>
+      <div class="trow gl0"><span class="tm">10:04</span><span class="nk" style="color:#b48ae0">Maya</span><span>nice work, everyone 🎉</span></div>
+    </div>
+    <div id="g-mem" class="abs dk">
+      <div class="hd">Members<span>24</span><em>by role ⌄</em></div>
+      <div class="mrow"><span class="adm">★</span><span style="color:#b48ae0">Maya Putri</span><span class="role">admin</span></div>
+      <div class="mrow"><span class="adm">★</span><span style="color:#5b8fe0">Dimas</span><span class="role">admin</span></div>
+      <div class="mrow"><span class="adm"></span><span style="color:#d39b3a">Ari Wibowo</span></div>
+      <div class="mrow" id="g-kai"><span class="adm"></span><span style="color:#4fb06a">Kai Nugroho</span></div>
+      <div class="mrow"><span class="adm"></span><span style="color:#e07aa8">Rina Hartono</span></div>
+      <div class="mrow"><span class="adm"></span><span style="color:#e06464">Sari Dewi</span></div>
+      <div class="mrow"><span class="adm"></span><span style="color:#3fb0bf">Teguh</span></div>
+      <div class="mrow"><span class="adm"></span><span style="color:#9a9aa6">you</span></div>
+    </div>
+    <div id="g-prof" class="abs dk">
+      <div class="top"><span class="av" style="--c:#3f8f5a">KN</span><div><div class="nm">Kai Nugroho</div><div class="sub">member · Release Squad</div></div></div>
+      <div class="ph">+62 850-0000-0001<br><span>lid 100000000000001</span></div>
+      <div class="bt"><span>Mention</span><span>Message</span></div>
+    </div>
+  </section>
+
+  <!-- 11 · notes -->
+  <section class="scene" id="notes">
+    <div class="cap" id="o-cap"></div>
+    <div id="o-card" class="abs dk">
+      <div class="hd"><i class="ic" data-i="note"></i>Launch checklist<div class="seg"><span>Edit</span><span class="on">Preview</span></div></div>
+      <div class="bd">
+        <div class="h2">This week</div>
+        <div class="ck" id="o-c1"><span class="cb" style="background:var(--d-accent);border-color:var(--d-accent)"><i class="ic" data-i="check"></i></span><span class="tx" style="color:var(--d-muted)">Freeze UI strings<i class="sl" style="width:calc(100% + 4px)"></i></span></div>
+        <div class="ck" id="o-c2"><span class="cb"><i class="ic" data-i="check"></i></span><span class="tx">Record the showcase video<i class="sl"></i></span></div>
+        <div class="ck" id="o-c3"><span class="cb"></span><span class="tx">Tag the v0.4 release</span></div>
+        <div class="p">Ping <b># Release Squad</b> once the build is green.</div>
+      </div>
+      <div class="ft"><i class="ic" data-i="lock"></i>Private, stays on this Mac. Nothing is sent to WhatsApp.</div>
+    </div>
+  </section>
+
+  <!-- 12 · performance -->
+  <section class="scene" id="perf">
+    <div id="p-bg" class="grad"></div>
+    <div id="p-bars"></div>
+    <div class="stat" style="left:100px"><b id="p-n1">≈0%</b><span>CPU at idle</span></div>
+    <div class="stat" style="left:460px"><b id="p-n2">38 MB</b><span>core memory</span></div>
+    <div class="stat" style="left:820px"><b id="p-n3">500k</b><span>messages, searchable offline</span></div>
+    <div id="p-foot" class="abs">Measured on a 500k-message account</div>
+  </section>
+
+  <!-- 13 · keyboard -->
+  <section class="scene" id="keys">
+    <div id="k-title" class="abs">Keyboard-<span class="accent">first</span></div>
+    <div class="kw" style="left:205px"><div class="key">⌘K</div><div class="l">Search</div></div>
+    <div class="kw" style="left:385px"><div class="key">⌘J</div><div class="l">Next unread</div></div>
+    <div class="kw" style="left:565px"><div class="key">⌘4</div><div class="l">Work inbox</div></div>
+    <div class="kw" style="left:745px"><div class="key">⌘5</div><div class="l">Notes</div></div>
+    <div class="kw" style="left:925px"><div class="key">⌘⇧F</div><div class="l">Focus Mode</div></div>
+  </section>
+
+  <!-- 14 · native -->
+  <section class="scene" id="native">
+    <div class="cap" style="top:46%"></div>
+    <div class="chips"><span>SwiftUI</span><span>Go + whatsmeow</span><span>SQLite FTS5</span></div>
+  </section>
+
+  <!-- 15 · built for work -->
+  <section class="scene" id="forwork">
+    <div id="fw-text" class="cap"><span id="fw-a">Built</span> <span id="fw-b">for</span> <span id="fw-c" class="accent">work</span></div>
+    <div id="fw-fill" class="grad" style="position:absolute;inset:0"></div>
+  </section>
+
+  <!-- 16 · open source -->
+  <section class="scene" id="glow">
+    <div class="grad" style="position:absolute;inset:0"></div>
+    <div id="gl-wrap">
+      <div class="gl" id="gl-s1">Open source.</div>
+      <div class="gl" id="gl-s2">Open source.</div>
+      <div class="gl" id="gl-main">Open source.</div>
+    </div>
+    <div id="gl-sub" class="abs">MIT licensed · contributions welcome</div>
+    <div id="gl-white" style="position:absolute;inset:0;background:#fbfcfd"></div>
+  </section>
+
+  <!-- 17 · end card -->
+  <section class="scene" id="end">
+    <div id="e-bg"></div>
+    <img id="e-icon" class="abs" src="../../apps/macos/icon-source.png" alt="">
+    <div id="e-name" class="abs">WhatsApp Work</div>
+    <div id="e-tag" class="abs">A fast, native, keyboard-first work inbox for WhatsApp on macOS</div>
+    <div id="e-url" class="abs"><span>github.com/ralfiannor/whatsapp-work</span></div>
+    <div id="e-foot" class="abs">Unofficial client. Not affiliated with or endorsed by Meta or WhatsApp. All names and messages shown are fictional.</div>
+  </section>
+
+  <div id="ripple"></div>
+  <div id="cursor"><svg viewBox="0 0 28 40" width="34" height="48"><path d="M3 3v26.5l6.6-6.1 4.4 10.1 4.6-2-4.4-9.9h9.3z" fill="#111" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></svg></div>
+</div>
+
+<div id="ui"><button id="play">Play</button><input id="scrub" type="range" min="0" step="0.01" value="0"><span id="tlabel">0.00</span></div>
+
+<script>
+'use strict';
+// ---------- primitives ----------
+const DURATION = 61;
+const SFX = [];               // sound cues, read by render.mjs for the soundtrack
+const sfx = (t, k, v = 1) => SFX.push({ t: Math.round(t * 1000) / 1000, k, v });
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const p = (t, a, b) => clamp((t - a) / (b - a));
+const eo = (x) => 1 - Math.pow(1 - x, 3);
+const eio = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const eback = (x) => { const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const bump = (t, a, b, c) => eo(p(t, a, b)) * (1 - eio(p(t, b, c)));
+const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+function css(el, { x = 0, y = 0, s = 1, sx = 1, o = 1, b = 0 } = {}, base = '') {
+  el.style.transform = `${base} translate(${x}px,${y}px) scale(${s * sx},${s})`;
+  el.style.opacity = o;
+  el.style.filter = b > 0.05 ? `blur(${b}px)` : 'none';
+}
+// fade-up entrance with a little blur, the default move of the whole film
+function enter(T, t0, d = 0.5, dy = 26) { const k = eo(p(T, t0, t0 + d)); return { y: (1 - k) * dy, o: k, b: (1 - k) * 8 }; }
+function out(T, t1, d = 0.32) { return eio(p(T, t1, t1 + d)); }
+
+function typer(t0, text, cps, seed = 1) {
+  const times = []; let t = t0;
+  for (let i = 0; i < text.length; i++) {
+    times.push(t); sfx(t, 'key', text[i] === ' ' ? 0.55 : 1);
+    t += (1 / cps) * (0.65 + 0.7 * hash(i * 7.31 + seed));
+  }
+  return { end: t, n(T) { let k = 0; while (k < times.length && times[k] <= T) k++; return k; } };
+}
+function rich(segs, n, extra = {}) {
+  let html = '', left = n;
+  for (const [txt, cls] of segs) {
+    if (left <= 0) break;
+    const part = txt.slice(0, left); left -= part.length;
+    const inner = esc(part) + (extra[cls] && part.length === txt.length ? extra[cls] : '');
+    html += cls ? `<span class="${cls}">${inner}</span>` : inner;
+  }
+  return html;
+}
+function caret(T, ty) {
+  const on = T < ty.end + 0.15 || Math.floor((T - ty.end) * 2.4) % 2 === 1;
+  return `<span class="caret" style="opacity:${on ? 1 : 0}"></span>`;
+}
+function posOf(sel, ax = 0.5, ay = 0.5) {
+  let el = typeof sel === 'string' ? $(sel) : sel;
+  const w = el.offsetWidth, h = el.offsetHeight; let x = 0, y = 0;
+  while (el && el.id !== 'stage') { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent; }
+  return [x + w * ax, y + h * ay];
+}
+
+const ICONS = {
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  moonf: '<path fill="currentColor" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  checkc: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8 5.4-5.5"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/>',
+  at: '<circle cx="12" cy="12" r="3.6"/><path d="M15.6 12v1.4a2.6 2.6 0 0 0 5.2 0V12a8.8 8.8 0 1 0-3.5 7"/>',
+  brief: '<rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8.5 7V5.5A1.5 1.5 0 0 1 10 4h4a1.5 1.5 0 0 1 1.5 1.5V7M3 12.5h18"/>',
+  brieff: '<path fill="currentColor" stroke="none" d="M5.5 7h13A2.5 2.5 0 0 1 21 9.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-8A2.5 2.5 0 0 1 5.5 7zM9 7V5.6A1.6 1.6 0 0 1 10.6 4h2.8A1.6 1.6 0 0 1 15 5.6V7h-1.6V5.7h-2.8V7z"/>',
+  person: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
+  people: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0M15.5 5.2a3.5 3.5 0 0 1 0 6.6M17.5 13.6a6.5 6.5 0 0 1 4 5.9"/>',
+  clip: '<path d="M20 11.5 12.2 19.3a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.8 16.9a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/>',
+  send: '<path d="M4 12 20 4l-4 16-4-7z"/>',
+  note: '<rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  sidebar: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9 4.5v15"/>',
+  star: '<path fill="currentColor" stroke="none" d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8z"/>',
+};
+for (const i of $$('i.ic[data-i]')) {
+  i.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[i.dataset.i]}</svg>`;
+}
+
+// ---------- scenes ----------
+const SCENES = [];
+function scene(id, start, end, render) { SCENES.push({ el: document.getElementById(id), start, end, render }); }
+function stagger(els, T, t0, step = 0.06, d = 0.4, dy = 10) {
+  els.forEach((el, i) => { const k = eo(p(T, t0 + i * step, t0 + i * step + d)); el.style.opacity = k; el.style.transform = `translateY(${(1 - k) * dy}px)`; });
+}
+function captionScene(id, start, end, segs, t0, cps) {
+  const el = $(`#${id} .cap`);
+  const ty = typer(t0, segs.map((s) => s[0]).join(''), cps, start);
+  scene(id, start, end, (T) => {
+    el.innerHTML = rich(segs, ty.n(T)) + caret(T, ty);
+    const k = out(T, end - 0.32);
+    css(el, { y: -26 * k, o: 1 - k, b: 7 * k }, 'translate(-50%,-50%)');
+  });
+  return ty;
+}
+
+// 1 · intro ----------------------------------------------------------------
+{
+  const line = $('#i-line'), w1 = $('#i-w1'), key = $('#i-key'), w2 = $('#i-w2');
+  const fkey = $('#i-fkey'), ring = $('#i-ring'), win = $('#i-win');
+  const rows = $$('#i-win .stg');
+  let kx = 0, ky = 0, tgt = [0, 0];
+  const PRESS = 3.0;
+  sfx(0.32, 'pop', 0.7); sfx(1.95, 'whoosh', 0.6); sfx(PRESS, 'press'); sfx(3.35, 'whoosh', 0.45);
+  scene('intro', 0, 6.7, (T) => {
+    if (!kx) { kx = key.offsetLeft + key.offsetWidth / 2; ky = key.offsetTop + key.offsetHeight / 2; tgt = posOf('#w-inbox'); }
+    // the sentence, then a camera push into the keycap
+    css(w1, { ...enter(T, 0.1), o: enter(T, 0.1).o * (1 - p(T, 1.95, 2.35)) });
+    const pk = p(T, 0.3, 0.85);
+    css(key, { s: 0.55 + 0.45 * eback(pk), o: eo(p(T, 0.3, 0.45)) });
+    const e2 = enter(T, 0.55);
+    css(w2, { ...e2, o: e2.o * (1 - p(T, 1.95, 2.35)), b: e2.b + 6 * p(T, 1.95, 2.35) });
+    const z = eio(p(T, 1.95, 2.75));
+    line.style.transformOrigin = `${kx}px ${ky}px`;
+    line.style.transform = `translate(${(640 - kx) * z}px,${(360 - (318 + ky)) * z}px) scale(${1 + 2.4 * z})`;
+    line.style.opacity = T < 2.75 ? 1 : 0;
+    // full-size keycap: press, glow, then it flies into the sidebar's Inbox tab
+    const d = bump(T, PRESS - 0.05, PRESS + 0.1, PRESS + 0.32);
+    const f = eio(p(T, 3.35, 4.0));
+    fkey.style.visibility = T >= 2.75 && T < 4.1 ? 'inherit' : 'hidden';
+    fkey.style.boxShadow = `inset 0 ${-10 + 7 * d}px 0 #d6e0e5, 0 ${34 - 24 * d}px ${80 - 50 * d}px rgba(20,50,70,.14), 0 0 0 ${10 * d}px rgba(15,181,154,${0.25 * d})`;
+    css(fkey, { x: (tgt[0] - 640) * f, y: 9 * d + (tgt[1] - 360) * f, s: lerp(1, 0.1, f), o: 1 - p(T, 3.75, 4.02) });
+    const rk = p(T, PRESS, PRESS + 0.7);
+    ring.style.visibility = rk > 0 && rk < 1 ? 'inherit' : 'hidden';
+    css(ring, { s: 1 + 0.45 * eo(rk), o: 0.8 * (1 - rk) });
+    // the app window rises behind it
+    const w = eo(p(T, 3.3, 4.2)), x = out(T, 6.3, 0.4);
+    css(win, { y: (1 - w) * 70 - 30 * x, s: (0.93 + 0.07 * w) * (1 + 0.04 * eio(p(T, 4.2, 6.7))), o: w * (1 - x), b: 8 * x });
+    stagger(rows, T, 3.85, 0.05);
+    const hl = bump(T, 5.0, 5.3, 6.0);
+    $('#i-ment').style.background = `rgba(20,165,140,${0.14 + 0.16 * hl})`;
+  });
+}
+
+// 2 · caption --------------------------------------------------------------
+captionScene('cap1', 6.6, 8.6, [['Find anything, ', ''], ['instantly', 'accent']], 6.75, 20);
+
+// 3 · search ---------------------------------------------------------------
+const CLICK = { search: 12.25, focus: 16.0, done: 20.95, snooze: 22.2, snoozeItem: 23.15, member: 36.75, note: 41.4 };
+{
+  const pill = $('#s-pill'), txt = $('#s-text'), card = $('#s-card'), rows = $$('#search .stg'), r1 = $('#s-r1');
+  const ty = typer(8.95, 'invoice march', 12, 3);
+  sfx(10.35, 'whoosh', 0.4);
+  scene('search', 8.5, 13.4, (T) => {
+    const k = eo(p(T, 8.55, 9.0)), m = eio(p(T, 10.35, 10.85));
+    txt.innerHTML = esc('invoice march'.slice(0, ty.n(T))) + caret(T, ty);
+    css(pill, { s: (0.92 + 0.08 * k) * lerp(1, 0.44, m), y: -205 * m, o: k * (1 - m), b: (1 - k) * 8 + 4 * m });
+    const c = eo(p(T, 10.45, 10.95)), x = out(T, 12.95, 0.4);
+    css(card, { s: (0.96 + 0.04 * c) * (1 + 0.04 * x), y: -10 * (1 - c), o: c * (1 - x), b: 6 * x });
+    stagger(rows, T, 10.7, 0.08);
+    r1.style.background = `rgba(20,165,140,${0.3 * eo(p(T, CLICK.search, CLICK.search + 0.15)) + 0.08 * p(T, 11.8, 12.1)})`;
+  });
+}
+
+// 4 · caption --------------------------------------------------------------
+captionScene('cap2', 13.3, 14.7, [["Let's ", ''], ['focus', 'accent']], 13.45, 13);
+
+// 5 · focus ----------------------------------------------------------------
+{
+  const card = $('#f-card'), moon = $('#f-moon'), rows = $$('#f-card .fr'), copy = $('#f-copy');
+  const t1 = $('#f-t1'), t2 = $('#f-t2');
+  sfx(17.3, 'pop', 0.5); sfx(18.2, 'pop', 0.7);
+  scene('focus', 14.6, 19.2, (T) => {
+    const x = out(T, 18.85, 0.35);
+    css(card, { ...enter(T, 14.65, 0.55, 34), o: enter(T, 14.65).o * (1 - x), b: enter(T, 14.65).b + 6 * x });
+    const fp = eio(p(T, CLICK.focus + 0.05, CLICK.focus + 0.55));
+    rows.forEach((r, i) => {
+      const k = eo(p(T, 14.8 + i * 0.05, 15.2 + i * 0.05));
+      const off = r.dataset.w === '0';
+      r.style.opacity = k * (off ? 1 - 0.58 * fp : 1);
+      r.style.filter = off && fp > 0.01 ? `grayscale(${fp}) blur(${0.5 * fp}px)` : 'none';
+      r.style.transform = `translateY(${(1 - k) * 10}px)`;
+    });
+    const hov = p(T, CLICK.focus - 0.35, CLICK.focus - 0.15);
+    moon.style.background = `rgba(20,165,140,${0.12 * hov * (1 - fp) + 0.25 * fp})`;
+    moon.style.color = fp > 0.5 ? '#2fd6b4' : '#9d9da4';
+    moon.firstElementChild.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">${fp > 0.5 ? ICONS.moonf : ICONS.moon}</svg>`;
+    css(moon, { s: 1 - 0.12 * bump(T, CLICK.focus - 0.02, CLICK.focus + 0.06, CLICK.focus + 0.25) });
+    const c = enter(T, 16.35, 0.6);
+    css(copy, { ...c, o: c.o * (1 - x) });
+    // a non-work notification is held, a work one comes through
+    const a = eo(p(T, 17.3, 17.65)), ah = eio(p(T, 17.8, 18.05)), aa = eio(p(T, 18.05, 18.4));
+    css(t1, { x: 40 * (1 - a) - 30 * aa, o: a * (1 - 0.45 * ah) * (1 - aa) * (1 - x), b: 2 * ah });
+    const b = eo(p(T, 18.2, 18.55));
+    css(t2, { x: 40 * (1 - b), o: b * (1 - x) });
+  });
+}
+
+// 6 · work inbox -----------------------------------------------------------
+{
+  const card = $('#n-card'), menu = $('#n-menu'), toast = $('#n-toast'), hdt = $('#n-hdt');
+  const items = [
+    { el: $('#n-hm'), h: 46, gone: [21.2, 21.6] },
+    { el: $('#n-a'), h: 84, gone: [21.15, 21.55] },
+    { el: $('#n-hw'), h: 46 },
+    { el: $('#n-c'), h: 84 },
+    { el: $('#n-hd'), h: 46 },
+    { el: $('#n-b'), h: 84, gone: [23.3, 23.7] },
+    { el: $('#n-d'), h: 84 },
+    { el: $('#n-hx'), h: 46 },
+    { el: $('#n-a2'), h: 64, come: [21.5, 21.9] },
+  ];
+  const doneBtn = $('#n-a .bdone'), clk = $('#n-b .bclk'), mi2 = $('#n-mi2');
+  sfx(19.25, 'pop', 0.5); sfx(CLICK.done + 0.03, 'ding'); sfx(CLICK.snooze + 0.05, 'pop', 0.6); sfx(CLICK.snoozeItem + 0.05, 'ding', 0.7);
+  scene('inbox', 19.1, 25.6, (T) => {
+    const x = out(T, 25.25, 0.35);
+    const e = enter(T, 19.15, 0.55, 34);
+    css(card, { ...e, o: e.o * (1 - x), b: e.b + 6 * x });
+    let y = 0;
+    items.forEach((it, i) => {
+      let pres = 1;
+      if (it.gone) pres = 1 - eio(p(T, it.gone[0], it.gone[1]));
+      if (it.come) pres = eio(p(T, it.come[0], it.come[1]));
+      const k = eo(p(T, 19.3 + i * 0.05, 19.7 + i * 0.05));
+      it.el.style.top = `${y}px`;
+      let dx = 0;
+      if (it.el.id === 'n-a') dx = 70 * eio(p(T, CLICK.done + 0.1, CLICK.done + 0.5));
+      if (it.el.id === 'n-b') dx = -70 * eio(p(T, CLICK.snoozeItem + 0.1, CLICK.snoozeItem + 0.5));
+      it.el.style.transform = `translate(${dx}px,${(1 - k) * 10}px) scaleY(${it.gone || it.come ? 0.6 + 0.4 * pres : 1})`;
+      it.el.style.transformOrigin = '50% 0';
+      it.el.style.opacity = k * (it.gone ? Math.pow(pres, 3) : pres);
+      y += it.h * pres;
+    });
+    // done: the check fills, the row leaves; snooze: menu, pick, row leaves
+    const dk = p(T, CLICK.done, CLICK.done + 0.12);
+    doneBtn.style.background = dk > 0 ? '#14a58c' : `rgba(20,165,140,${0.35 * p(T, CLICK.done - 0.4, CLICK.done - 0.15)})`;
+    doneBtn.style.color = dk > 0 ? '#fff' : '';
+    css(doneBtn, { s: 1 + 0.18 * bump(T, CLICK.done, CLICK.done + 0.08, CLICK.done + 0.3) });
+    clk.style.background = `rgba(20,165,140,${0.35 * p(T, CLICK.snooze - 0.4, CLICK.snooze - 0.15) * (1 - p(T, CLICK.snoozeItem, CLICK.snoozeItem + 0.2))})`;
+    const [cx, cy] = posOf(clk);
+    const [ox, oy] = posOf(card, 0, 0);
+    menu.style.left = `${cx - ox - 300}px`;
+    menu.style.top = `${cy - oy + 26}px`;
+    const mo = eo(p(T, CLICK.snooze + 0.03, CLICK.snooze + 0.22)) * (1 - p(T, CLICK.snoozeItem + 0.05, CLICK.snoozeItem + 0.2));
+    menu.style.visibility = mo > 0 ? 'inherit' : 'hidden';
+    css(menu, { s: 0.92 + 0.08 * mo, o: mo });
+    mi2.style.background = T > CLICK.snoozeItem - 0.3 ? '#1f8a76' : 'transparent';
+    hdt.textContent = T < CLICK.snoozeItem + 0.25 ? 'Direct — 2' : 'Direct — 1';
+    const tk = eo(p(T, CLICK.snoozeItem + 0.25, CLICK.snoozeItem + 0.6));
+    css(toast, { y: -8 * (1 - tk), o: tk * (1 - x) });
+  });
+}
+
+// 7 · caption --------------------------------------------------------------
+captionScene('cap3', 25.5, 27.2, [['@mentions, ', ''], ['done right', 'accent']], 25.65, 19);
+
+// 8 · mention + optimistic send ---------------------------------------------
+{
+  const field = $('#m-field'), pop = $('#m-pop'), own = $('#m-own'), st = $('#m-st'), kc = $('#m-k'), card = $('#m-card');
+  const tA = typer(27.4, 'Thanks! ', 15, 5);
+  const tB = typer(tA.end + 0.15, '@Ri', 8, 6);
+  const ACC = tB.end + 0.45;
+  const tC = typer(ACC + 0.2, ' can you review?', 16, 7);
+  const SEND = tC.end + 0.35;
+  sfx(ACC, 'press', 0.55); sfx(SEND, 'press', 0.55); sfx(SEND + 0.05, 'send'); sfx(SEND + 1.0, 'ding', 0.6);
+  let popX = 0;
+  scene('mention', 27.1, 32.0, (T) => {
+    const x = out(T, 31.65, 0.35);
+    const e = enter(T, 27.15, 0.5, 30);
+    css(card, { ...e, o: e.o * (1 - x), b: e.b + 6 * x });
+    let html = esc('Thanks! '.slice(0, tA.n(T)));
+    if (T < ACC) html += esc('@Ri'.slice(0, tB.n(T)));
+    else html += '<span class="mtok">@Rina Hartono</span>' + esc(' can you review?'.slice(0, tC.n(T)));
+    const typing = tA.n(T) > 0 || T >= tB.end;
+    const sent = p(T, SEND, SEND + 0.15);
+    field.innerHTML = !typing ? '<span class="ph">Message…</span>' : sent >= 1 ? '<span class="ph">Message…</span>' : html + caret(T, T < ACC ? tB : tC);
+    field.style.opacity = sent > 0 && sent < 1 ? 1 - sent : 1;
+    // the member picker opens on "@"
+    if (!popX) {
+      const probe = document.createElement('span'); probe.style.cssText = 'font:21px var(--mono);visibility:hidden;position:absolute;white-space:pre';
+      probe.textContent = 'Thanks! '; document.body.appendChild(probe);
+      const [fx, fy] = posOf(field, 0, 0);
+      popX = fx - 170 + 18 + probe.offsetWidth; probe.remove();
+      pop.style.left = `${popX}px`; pop.style.top = `${fy - 104 - 158}px`;
+    }
+    const po = eo(p(T, tB.end - 0.33, tB.end - 0.15)) * (1 - p(T, ACC, ACC + 0.12));
+    pop.style.visibility = po > 0 ? 'inherit' : 'hidden';
+    css(pop, { s: 0.94 + 0.06 * po, y: 8 * (1 - po), o: po });
+    // ↩ keycap flashes on accept and on send
+    const kk = Math.max(bump(T, ACC - 0.05, ACC + 0.05, ACC + 0.45), bump(T, SEND - 0.05, SEND + 0.05, SEND + 0.45));
+    kc.style.left = '1020px'; kc.style.top = '540px';
+    css(kc, { s: 0.8 + 0.2 * kk, y: 6 * bump(T, ACC, ACC + 0.06, ACC + 0.16) + 6 * bump(T, SEND, SEND + 0.06, SEND + 0.16), o: kk * (1 - x) });
+    // optimistic send: … then ✓ then ✓✓
+    const ok = eo(p(T, SEND + 0.05, SEND + 0.4));
+    own.style.opacity = ok; own.style.transform = `translateY(${(1 - ok) * 30}px)`;
+    st.textContent = T < SEND + 0.55 ? '…' : T < SEND + 1.0 ? '✓' : '✓✓';
+    st.style.color = T < SEND + 1.0 ? '' : '#2fd6b4';
+  });
+}
+
+// 9 · capsule transition ---------------------------------------------------
+{
+  const els = $$('#caps > div');
+  const row = [0, 0, 1, 1, 2, 2];
+  sfx(31.85, 'whoosh', 0.8);
+  scene('caps', 31.8, 33.2, (T) => {
+    const lt = T - 31.8;
+    els.forEach((el, i) => {
+      const r = row[i], dir = r % 2 ? -1 : 1;
+      const a = eo(p(lt, 0.0 + r * 0.06, 0.55 + r * 0.06)), b = eio(p(lt, 0.85 + r * 0.04, 1.35 + r * 0.04));
+      const v = Math.abs(1 - a) + b;
+      css(el, { x: dir * (-(1 - a) * 1100 + b * 1300) + dir * 30 * Math.sin(lt * 2), sx: 1 + 0.35 * clamp(v), o: 1 });
+    });
+  });
+}
+
+// 10 · groups, IRC-style ---------------------------------------------------
+{
+  const title = $('#g-title'), log = $('#g-log'), mem = $('#g-mem'), prof = $('#g-prof'), kai = $('#g-kai');
+  const lines = $$('#g-log .trow');
+  const at = [33.15, 33.2, 33.25, 33.9, 34.35, 34.8, 35.25];
+  lines.slice(3).forEach((_, i) => sfx(at[i + 3], 'tick', 0.6));
+  sfx(35.3, 'whoosh', 0.35); sfx(CLICK.member + 0.05, 'pop', 0.7);
+  scene('irc', 33.0, 38.2, (T) => {
+    const x = out(T, 37.85, 0.35);
+    const et = enter(T, 33.1); css(title, { ...et, o: et.o * (1 - x) });
+    const el = enter(T, 33.05, 0.55, 34); css(log, { ...el, o: el.o * (1 - x), b: el.b + 6 * x });
+    lines.forEach((ln, i) => { const k = eo(p(T, at[i], at[i] + 0.35)); ln.style.opacity = k; ln.style.transform = `translateY(${(1 - k) * 16}px)`; });
+    const m = eo(p(T, 35.3, 35.85)); css(mem, { x: 340 * (1 - m), o: m * (1 - x), b: 6 * x });
+    kai.style.background = `rgba(20,165,140,${0.25 * p(T, CLICK.member - 0.35, CLICK.member - 0.1)})`;
+    const pk = p(T, CLICK.member + 0.05, CLICK.member + 0.4);
+    prof.style.visibility = pk > 0 ? 'inherit' : 'hidden';
+    css(prof, { s: 0.85 + 0.15 * eback(pk), o: eo(pk) * (1 - x) });
+  });
+}
+
+// 11 · notes ---------------------------------------------------------------
+{
+  const cap = $('#o-cap'), card = $('#o-card'), c2 = $('#o-c2'), cb = $('#o-c2 .cb'), sl = $('#o-c2 .sl'), tx = $('#o-c2 .tx');
+  const segs = [['Notes that ', ''], ['never leave your Mac', 'accent']];
+  const ty = typer(38.25, segs.map((s) => s[0]).join(''), 24, 11);
+  sfx(CLICK.note + 0.03, 'ding', 0.8);
+  scene('notes', 38.1, 42.8, (T) => {
+    const x = out(T, 42.45, 0.35);
+    const mv = eio(p(T, 39.75, 40.25));
+    cap.innerHTML = rich(segs, ty.n(T)) + (mv > 0.5 ? '' : caret(T, ty));
+    css(cap, { y: -245 * mv, s: 1 - 0.36 * mv, o: 1 - x }, 'translate(-50%,-50%)');
+    const e = enter(T, 39.95, 0.55, 40); css(card, { ...e, o: e.o * (1 - x), b: e.b + 6 * x });
+    const ck = eo(p(T, CLICK.note, CLICK.note + 0.15));
+    cb.style.background = ck > 0 ? 'var(--d-accent)' : `rgba(20,165,140,${0.3 * p(T, CLICK.note - 0.4, CLICK.note - 0.15)})`;
+    cb.style.borderColor = ck > 0 ? 'var(--d-accent)' : '';
+    cb.firstElementChild.style.opacity = ck;
+    css(cb, { s: 1 + 0.2 * bump(T, CLICK.note, CLICK.note + 0.08, CLICK.note + 0.3) });
+    sl.style.width = `calc(${eio(p(T, CLICK.note + 0.1, CLICK.note + 0.45)) * 100}% + 4px)`;
+    sl.style.opacity = p(T, CLICK.note + 0.1, CLICK.note + 0.12);
+    tx.style.color = ck > 0.5 ? 'var(--d-muted)' : '';
+  });
+}
+
+// 12 · performance -----------------------------------------------------------
+{
+  const bg = $('#p-bg'), barsBox = $('#p-bars'), foot = $('#p-foot');
+  const stats = $$('#perf .stat'), n2 = $('#p-n2'), n3 = $('#p-n3');
+  const N = 17, bars = [];
+  for (let i = 0; i < N; i++) { const b = document.createElement('div'); b.className = 'bar'; b.style.left = `${309 + i * 40}px`; barsBox.appendChild(b); bars.push(b); }
+  sfx(42.75, 'whoosh', 0.6); [0, 1, 2].forEach((i) => sfx(44.4 + i * 0.13, 'pop', 0.55));
+  scene('perf', 42.7, 47.4, (T) => {
+    const r = eio(p(T, 42.7, 43.25)), x = out(T, 47.05, 0.35);
+    bg.style.clipPath = `circle(${r * 900}px at 50% 50%)`;
+    bg.style.opacity = 1 - x;
+    const gone = eio(p(T, 44.05, 44.45));
+    bars.forEach((b, i) => {
+      const env = 0.3 + 0.7 * Math.sin(Math.PI * (i + 1) / (N + 1));
+      const live = 0.5 + 0.5 * Math.sin(T * 5.2 + i * 0.7) * (0.6 + 0.4 * Math.sin(T * 2.3 + i * 1.3));
+      const grow = eo(p(T, 42.95 + i * 0.02, 43.35 + i * 0.02));
+      const h = (24 + 250 * env * live) * grow * (1 - gone) + 6 * gone;
+      b.style.height = `${h}px`; b.style.top = `${360 - h / 2}px`; b.style.opacity = grow * (1 - gone);
+    });
+    stats.forEach((s, i) => { const e = enter(T, 44.35 + i * 0.13, 0.5, 30); css(s, { ...e, o: e.o * (1 - x) }); });
+    n2.textContent = `${Math.round(38 * eo(p(T, 44.48, 45.3)))} MB`;
+    n3.textContent = `${Math.round(500 * eo(p(T, 44.61, 45.5)))}k`;
+    const f = enter(T, 45.1, 0.5, 14); css(foot, { ...f, o: f.o * (1 - x) });
+  });
+}
+
+// 13 · keyboard ---------------------------------------------------------------
+{
+  const title = $('#k-title'), kws = $$('#keys .kw');
+  const PT = kws.map((_, i) => 48.25 + i * 0.4);
+  PT.forEach((t) => sfx(t, 'press', 0.5));
+  scene('keys', 47.3, 50.8, (T) => {
+    const x = out(T, 50.45, 0.35);
+    const et = enter(T, 47.4); css(title, { ...et, o: et.o * (1 - x) });
+    kws.forEach((kw, i) => {
+      const k = p(T, 47.55 + i * 0.07, 48.0 + i * 0.07);
+      const key = kw.firstElementChild, lab = kw.lastElementChild;
+      const d = bump(T, PT[i] - 0.04, PT[i] + 0.08, PT[i] + 0.3), lit = p(T, PT[i], PT[i] + 0.1);
+      css(kw, { y: (1 - eback(k)) * -50 - 18 * x, o: eo(k) * (1 - x), b: 6 * x });
+      key.style.transform = `translateY(${6 * d}px)`;
+      key.style.boxShadow = `inset 0 ${-4 + 3 * d}px 0 #d6e0e5, 0 ${14 - 9 * d}px ${30 - 16 * d}px rgba(20,50,70,.14), 0 0 0 ${lit * 3}px rgba(15,181,154,${0.55 * lit})`;
+      lab.style.color = lit > 0.5 ? '#0b8f80' : '';
+    });
+  });
+}
+
+// 14 · native ---------------------------------------------------------------
+{
+  const segs = [['Native macOS. No ', ''], ['Electron', 'strike'], ['.', '']];
+  const cap = $('#native .cap'), chips = $$('#native .chips span');
+  const ty = typer(50.85, segs.map((s) => s[0]).join(''), 21, 13);
+  sfx(52.2, 'swipe', 0.6);
+  scene('native', 50.7, 53.3, (T) => {
+    const x = out(T, 52.95, 0.35);
+    const w = eio(p(T, 52.2, 52.5)) * 100;
+    cap.innerHTML = rich(segs, ty.n(T), { strike: `<i class="sl" style="width:calc(${w}% + 8px);opacity:${w > 0 ? 1 : 0}"></i>` }) + caret(T, ty);
+    css(cap, { y: -26 * x, o: 1 - x, b: 7 * x }, 'translate(-50%,-50%)');
+    chips.forEach((c, i) => { const k = p(T, 52.35 + i * 0.09, 52.75 + i * 0.09); css(c, { s: 0.7 + 0.3 * eback(k), o: eo(k) * (1 - x) }); });
+  });
+}
+
+// 15 · built for work -------------------------------------------------------
+{
+  const text = $('#fw-text'), a = $('#fw-a'), b = $('#fw-b'), c = $('#fw-c'), fill = $('#fw-fill');
+  sfx(54.35, 'riser', 1);
+  let cx = 0;
+  scene('forwork', 53.2, 55.2, (T) => {
+    if (!cx) cx = c.offsetLeft + c.offsetWidth / 2;
+    css(a, enter(T, 53.3, 0.45, 20)); css(b, enter(T, 53.45, 0.45, 20)); css(c, enter(T, 53.6, 0.45, 20));
+    const z = eio(p(T, 54.3, 55.15));
+    text.style.transformOrigin = `${cx}px 50%`;
+    text.style.transform = `translate(-50%,-50%) translateX(${-(cx - text.offsetWidth / 2) * z}px) scale(${1 + 9 * z})`;
+    fill.style.opacity = eio(p(T, 54.6, 55.05));
+  });
+}
+
+// 16 · open source ------------------------------------------------------------
+{
+  const main = $('#gl-main'), s1 = $('#gl-s1'), s2 = $('#gl-s2'), sub = $('#gl-sub'), white = $('#gl-white');
+  scene('glow', 55.0, 57.1, (T) => {
+    const k = p(T, 55.1, 55.75), m = eo(k);
+    css(main, { x: -120 * (1 - m), o: eo(p(T, 55.1, 55.35)), b: 16 * (1 - m) });
+    main.style.textShadow = `0 0 ${30 + 30 * (1 - m)}px rgba(255,255,255,.55)`;
+    // vertical light streaks behind the words
+    const g = 0.55 * (1 - 0.55 * m) * eo(p(T, 55.1, 55.3));
+    css(s1, { x: -200 * (1 - m), sx: 1, s: 1, o: g, b: 10 }); s1.style.transform += ' scaleY(2.2)';
+    css(s2, { x: -60 * (1 - m), o: g * 0.8, b: 4 }); s2.style.transform += ' scaleY(1.45)';
+    const e = enter(T, 55.85, 0.5, 14); css(sub, e);
+    white.style.opacity = eio(p(T, 56.7, 57.08));
+  });
+}
+
+// 17 · end card -------------------------------------------------------------
+{
+  const icon = $('#e-icon'), name = $('#e-name'), tag = $('#e-tag'), url = $('#e-url'), foot = $('#e-foot');
+  sfx(57.05, 'chime');
+  scene('end', 56.9, DURATION + 1, (T) => {
+    const k = p(T, 57.05, 57.65);
+    css(icon, { s: 0.6 + 0.4 * eback(k), o: eo(p(T, 57.05, 57.25)) });
+    css(name, enter(T, 57.3)); css(tag, enter(T, 57.5)); css(url, enter(T, 57.7)); css(foot, enter(T, 57.95, 0.6, 10));
+  });
+}
+
+// ---------- cursor ----------
+let TRACK = [];
+function buildCursor() {
+  const add = (t) => (sel, dx = 0, dy = 0) => { seek(t); const [x, y] = posOf(sel); return [x + dx, y + dy]; };
+  const at = (t, sel, dx, dy) => [t, ...add(t)(sel, dx, dy)];
+  TRACK = [
+    { pts: [[11.3, 1150, 700], at(12.05, '#s-r1', -120, 0), at(12.75, '#s-r1', -90, 40)], clicks: [CLICK.search], off: 12.85 },
+    { pts: [[15.25, 980, 660], at(15.85, '#f-moon'), at(16.5, '#f-moon', 50, 70)], clicks: [CLICK.focus], off: 16.55 },
+    { pts: [[19.95, 1180, 690], at(20.75, '#n-a .bdone'), at(21.95, '#n-b .bclk'), at(22.9, '#n-mi2', -40, 0), at(23.65, '#n-mi2', 0, 60)], clicks: [CLICK.done, CLICK.snooze, CLICK.snoozeItem], off: 23.7 },
+    { pts: [[35.95, 1180, 700], at(36.6, '#g-kai', -50, 0), at(37.25, '#g-kai', -20, 50)], clicks: [CLICK.member], off: 37.3 },
+    { pts: [[40.6, 980, 690], at(41.25, '#o-c2 .cb'), at(41.9, '#o-c2 .cb', 50, 60)], clicks: [CLICK.note], off: 42.0 },
+  ];
+  for (const seg of TRACK) for (const c of seg.clicks) sfx(c, 'click');
+}
+function cursorAt(T) {
+  const cur = $('#cursor'), rip = $('#ripple');
+  cur.style.visibility = 'hidden'; rip.style.visibility = 'hidden';
+  for (const seg of TRACK) {
+    const t0 = seg.pts[0][0];
+    if (T < t0 - 0.25 || T > seg.off + 0.25) continue;
+    let x = seg.pts[0][1], y = seg.pts[0][2];
+    for (let i = 0; i < seg.pts.length - 1; i++) {
+      const [ta, xa, ya] = seg.pts[i], [tb, xb, yb] = seg.pts[i + 1];
+      if (T >= ta) {
+        const u = eio(p(T, ta, tb)), dist = Math.hypot(xb - xa, yb - ya);
+        const arc = Math.sin(Math.PI * u) * dist * 0.08;
+        x = lerp(xa, xb, u) + arc * (yb - ya) / (dist || 1);
+        y = lerp(ya, yb, u) - arc * (xb - xa) / (dist || 1);
+      }
+    }
+    const fin = eo(p(T, t0 - 0.25, t0)), fout = p(T, seg.off, seg.off + 0.25);
+    let s = 1;
+    for (const c of seg.clicks) {
+      const d = T - c;
+      if (d >= -0.06 && d < 0.18) s = Math.min(s, 1 - 0.2 * Math.sin(Math.PI * clamp((d + 0.06) / 0.24)));
+      if (d >= 0 && d < 0.5) {
+        const r = 8 + 34 * eo(d / 0.5);
+        rip.style.visibility = 'visible';
+        rip.style.width = rip.style.height = `${2 * r}px`;
+        rip.style.transform = `translate(${x - r}px,${y - r}px)`;
+        rip.style.opacity = 0.7 * (1 - d / 0.5);
+      }
+    }
+    cur.style.visibility = 'visible';
+    cur.style.opacity = fin * (1 - fout);
+    cur.style.transform = `translate(${x - 3 + 30 * (1 - fin)}px,${y - 3 + 30 * (1 - fin)}px) scale(${s})`;
+  }
+}
+
+// ---------- timeline ----------
+function seek(T) {
+  const b = $$('#bg .blob');
+  b[0].style.transform = `translate(${760 + 50 * Math.sin(T * 0.21)}px,${-260 + 40 * Math.cos(T * 0.17)}px)`;
+  b[1].style.transform = `translate(${-260 + 60 * Math.cos(T * 0.15)}px,${300 + 40 * Math.sin(T * 0.19)}px)`;
+  b[2].style.transform = `translate(${380 + 70 * Math.sin(T * 0.12)}px,${380 + 30 * Math.cos(T * 0.23)}px)`;
+  for (const s of SCENES) {
+    const on = T >= s.start && T < s.end;
+    s.el.style.visibility = on ? 'inherit' : 'hidden';
+    if (on) s.render(T);
+  }
+  cursorAt(T);
+}
+window.seek = seek;
+window.DURATION = DURATION;
+window.SFX = SFX;
+window.SHOWCASE_READY = Promise.all([document.fonts.ready, ...$$('img').map((i) => i.decode().catch(() => {}))]).then(() => {
+  buildCursor();
+  SFX.sort((a, b) => a.t - b.t);
+  seek(0);
+  return true;
+});
+
+// ---------- preview controls ----------
+if (new URLSearchParams(location.search).has('render')) {
+  document.documentElement.classList.add('render');
+} else {
+  const stage = $('#stage'), scrub = $('#scrub'), label = $('#tlabel'), play = $('#play');
+  const fit = () => { stage.style.transform = `scale(${Math.min(innerWidth / 1280, (innerHeight - 48) / 720)})`; };
+  addEventListener('resize', fit); fit();
+  scrub.max = DURATION;
+  let playing = false, t0 = 0, base = 0;
+  const show = (t) => { seek(t); scrub.value = t; label.textContent = t.toFixed(2); };
+  scrub.oninput = () => { playing = false; play.textContent = 'Play'; show(+scrub.value); };
+  play.onclick = () => { playing = !playing; play.textContent = playing ? 'Pause' : 'Play'; base = +scrub.value; t0 = performance.now(); if (playing) requestAnimationFrame(loop); };
+  const loop = (now) => { if (!playing) return; const t = base + (now - t0) / 1000; if (t >= DURATION) { playing = false; play.textContent = 'Play'; return; } show(t); requestAnimationFrame(loop); };
+  window.SHOWCASE_READY.then(() => show(+(new URLSearchParams(location.search).get('t') || 0)));
+}
+</script>
+</body>
+</html>

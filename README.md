@@ -8,6 +8,11 @@ Native macOS app (Swift/SwiftUI). Go sidecar with
 SQLite + FTS5 local storage: instant search, keyset pagination,
 offline-first. No Electron, no WebView, no Chromium.
 
+<p align="center">
+  <a href="docs/media/showcase.mp4"><img src="docs/media/showcase.webp" width="100%" alt="WhatsApp Work showcase: instant search, Focus Mode, the work inbox, @mentions, IRC-style groups and local notes"></a>
+</p>
+<p align="center"><sub><a href="docs/media/showcase.mp4">▶ Watch the full video with sound (MP4)</a> · every name and message in it is fictional</sub></p>
+
 > [!WARNING]
 > **Unofficial client.** whatsmeow is not endorsed by Meta. Using unofficial
 > clients violates WhatsApp's Terms of Service and carries a real risk of
@@ -113,6 +118,7 @@ make race          # -race
 WW_BENCH_N=150000 make bench   # 150k-fixture benchmarks
 
 ./scripts/make-icon.sh [src.png]   # regenerate the app icon
+node scripts/showcase/render.mjs   # re-render docs/media/showcase.{mp4,webp}
 ```
 
 Working agreements, invariants and gotchas live in
