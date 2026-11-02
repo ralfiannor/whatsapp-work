@@ -21,6 +21,19 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
   - The chat list no longer looks up the stored Focus Mode setting for
     every comparison while re-sorting, and unchanged rows no longer redraw
     on every incoming event.
+  - With a chat open, an incoming event in any chat no longer redraws every
+    visible message of the open chat, and the chat list no longer rebuilds
+    every loaded row per update. Measured with a chat open: both processes
+    together ~12.9% → ~2.2% CPU (busier window before), core memory
+    72–74 → 48–52 MB.
+  - The Inbox tab no longer refreshes every 60 s: the core announces when a
+    snooze ends (`inbox.changed`, reason `snooze_expired`).
+
+### Fixed
+
+- After WhatsApp answers the business-name lookup with "rate-overlimit"
+  (429), the core waits 24 h — across restarts — before asking again,
+  instead of drawing another refusal on every launch.
 
 ### Planned
 

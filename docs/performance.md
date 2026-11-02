@@ -739,11 +739,78 @@ tests passed, Release app built universal (`x86_64 arm64`) with
 
 ### Not measured / open
 
-- Chat-selected idle (transcript visible): `MessageList`, `MessageBubble`
-  and `ComposerBar` still observe all of `AppState`, so a visible transcript
-  re-renders on every event. Needs a run with a manually selected chat.
+- Chat-selected idle: measured in round 2 below.
 - Long-run growth: the 15 h v0.3.0 app reached 114 MB footprint (52 MB at
-  27 min here). Not attributed yet; needs a MallocStackLogging run.
+  27 min here); see round 2.
 - A like-for-like end-to-end CPU comparison under similar traffic.
 - A long-idle core will still fill its 5 × 4 MB page caches; the 15 h
   number with this build is not measured.
+
+### Round 2 — chat open, transcript rows, inbox, usync (2026-11-02)
+
+Same machine and method as above. The chat-open state is reached without
+side effects: the app's own deep link (`whatsapp://send?phone=<own number>`)
+opens the account's "message yourself" chat, which has no unread messages,
+so the read gate sends nothing. A video call ran in a browser during these
+runs; `ps` CPU is per process, but contention and thermal state add noise.
+Traffic again differed between windows and is listed.
+
+| 5-min window, 10 min after launch | Build | Messages | App CPU | Core CPU | Both | App footprint | Core footprint |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Own chat open | v0.3.1 | 44 | 8.56% | 4.29% | **12.85%** | 60–61 MB | 72–74 MB |
+| Own chat open | this branch | 23 | 1.86% | 0.30% | **2.16%** | 61–64 MB | 48–52 MB |
+| No chat selected | this branch, rows only | 14 | 2.16% | 0.26% | 2.42% | 49–50 MB | 42–47 MB |
+| No chat selected | this branch | 56 | 7.80% | 0.79% | 8.59% | 49–51 MB | 45–51 MB |
+
+Per received message, with a chat open, the two processes spent ~0.96 s of
+CPU on v0.3.1 and ~0.30 s on this branch (core alone: 0.32 s → 0.04 s, the
+name pass). The 56-message window shows how much traffic drives the app
+figure; the app's remaining per-update cost is SwiftUI graph update, Core
+Animation commit and AppKit layout, not app code.
+
+**Transcript rows** — Instruments SwiftUI template, 90 s, own chat open:
+
+| per 90 s | v0.3.1 | this branch |
+|---|---:|---:|
+| `MessageBubble` bodies · time | 171 · 261.9 ms | 0 (skipped by `==`) |
+| `MediaBubble` bodies · time | 99 · 58.4 ms | 0 |
+| `ChatRow` bodies · time | 153 · 100.4 ms | 30 · 3.9 ms |
+| All view bodies · time | 3,126 · 702.0 ms | 1,737 · 58.8 ms |
+
+`MessageBubble`, `MediaBubble` and `IRCLineText` held `@EnvironmentObject`,
+so every `AppState` change re-ran every visible bubble. The list now passes
+values (`MessageBubble.Labels`, the decoded image, the busy flag) and a plain
+`AppState` reference for actions; the bubble is `.equatable()`.
+
+**Chat list built every loaded row per update.** `.tag(chat.jid)` inside the
+row closure made `List(selection:)` evaluate every loaded chat (≈950) on each
+update to read its tag. `Chat.id` is the jid, so the `ForEach` ids already
+serve as selection tags (checked: the selected row still highlights). The
+row helpers that ran per row fell from ~80 ms to 1–2 ms per 90 s.
+
+**Still open: the segmented controls.** On every chat-list update SwiftUI
+asks the two `NSSegmentedControl`s (tab and filter pickers) for their size
+again: `_cellSizeForBounds` takes 262–683 ms per 90 s, ~30–45 ms per update,
+the largest single item left in the app's per-update cost. Moving the
+pickers into `Equatable` value views and fixing their vertical size changed
+nothing live (an isolated harness did not reproduce the trigger), so both
+were reverted.
+
+**Moving `AppState` to `@Observable` was tried and reverted.** On macOS 14
+SwiftUI keeps a view's previous observation tracking until a property it
+read changes, so reads of rarely-changing state (`contactNames`) accumulate
+per re-render: `ObservationTracking` objects grew 3,298 → 4,109 in 2.7 min
+and the app footprint grew 114 → 159 MB in 6 minutes under traffic (v0.3.1
+stayed flat at 60 MB). The value-row approach above gets the render savings
+without it.
+
+**Inbox and usync.** The Inbox tab no longer refetches every 60 s; the core
+emits `inbox.changed` (`snooze_expired`) at the next snooze deadline, found
+with a few-ms read of the pending-items index. A usync rate-limit answer
+(HTTP 429, seen on every launch) now holds the business-name lookup off for
+24 h across launches.
+
+**GOGC.** `GOGC=50` was measured against the default on this branch: core
+footprint 42–46 MB vs 44–49 MB in comparable windows — no material gain, so
+the default stays.
+

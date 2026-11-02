@@ -116,6 +116,10 @@ in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
   body on EVERY `AppState` change — its `==` is never consulted. Pass rows
   plain values, plus a plain `AppState` reference for actions (`ChatRow`,
   `MessageBubble` + `MessageBubble.Labels`, `IRCLineText`).
+- In `List(selection:)`, don't `.tag(id)` rows of a `ForEach` over
+  `Identifiable` data whose id is the selection type: the ids already are
+  the tags, and an explicit tag inside the row closure makes the List build
+  every loaded row on each update (≈950 chats) just to read it.
 - **Do not move `AppState` to `@Observable` while macOS 14 is supported.**
   Tried 2026-11-02: SwiftUI on 14.x keeps a view's old observation tracking
   until a property it read changes, so reads of rarely-changing state
