@@ -94,7 +94,13 @@ final class AppState: ObservableObject {
     @Published private(set) var notesOpen = false
     /// Focus Mode: only work-marked chats (work groups + starred work
     /// contacts) may notify or feed the dock badge; everything else silent.
-    @AppStorage("focusMode") var focusMode = false
+    /// A published in-memory copy of the "focusMode" default, not
+    /// @AppStorage: outside a view every @AppStorage read is a CFPreferences
+    /// lookup, and the chat sort reads this per comparison on every event
+    /// (~25% of idle main-thread time on a real account, 2026-11-02).
+    @Published var focusMode = UserDefaults.standard.bool(forKey: "focusMode") {
+        didSet { UserDefaults.standard.set(focusMode, forKey: "focusMode") }
+    }
     /// Privacy: DM read receipts are suppressed unless the user opts back
     /// in (Settings ▸ "Don't send read receipts in direct messages").
     @AppStorage("suppressDMReadReceipts") var suppressDMReadReceipts = true
@@ -1013,6 +1019,7 @@ final class AppState: ObservableObject {
     /// cursor). Focus Mode hoists work contacts and work groups above
     /// everything else; both buckets keep the same recency order inside.
     private func sortChats() {
+        let focusMode = focusMode
         chats.sort { a, b in
             if focusMode {
                 let aWork = (a.is_work ?? false) || (a.is_starred ?? false)
