@@ -28,6 +28,9 @@ struct WhatsAppWorkApp: App {
                 .onOpenURL { url in
                     Task { @MainActor in await state.handleWhatsAppLink(url) }
                 }
+                // Without this, every inbound URL makes the WindowGroup open
+                // a second window; the open window takes the link instead.
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
         .windowStyle(.hiddenTitleBar)
         .commands {

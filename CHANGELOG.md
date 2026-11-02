@@ -10,6 +10,11 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ### Fixed
 
+- wa.me "Continue to Chat" links open the chat in the existing window.
+  Each link used to open a second window, which also set up the app's
+  connection watchers and update checks a second time.
+- A `+` in a wa.me link's `text=` prefill becomes a space
+  (`text=hello+world` → "hello world"); `%2B` stays a literal plus.
 - Work inbox (⌘4) loaded slowly (1.7–3.6 s per refresh on a large
   account): chatter in groups not marked Work was held as hidden pending
   items. Only mentions, direct messages and work-group traffic are now
