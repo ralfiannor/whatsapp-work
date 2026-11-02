@@ -8,6 +8,33 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Changed
+
+- Lower idle CPU and memory on large accounts (measured on a 2018 Intel
+  MacBook Pro; see `docs/performance.md`, 2026-11-02):
+  - The core's background name pass no longer rescans every stored message
+    and re-issues thousands of no-op statements each time incoming traffic
+    re-arms it (2.3 s → ~0.2 s per pass). A one-time migration (v17) adds
+    a small index at first launch.
+  - SQLite page cache is 4 MB per connection instead of 16 MB; query
+    latency is unchanged on a 640k-message database.
+  - The chat list no longer looks up the stored Focus Mode setting for
+    every comparison while re-sorting, and unchanged rows no longer redraw
+    on every incoming event.
+  - With a chat open, an incoming event in any chat no longer redraws every
+    visible message of the open chat, and the chat list no longer rebuilds
+    every loaded row per update. Measured with a chat open: both processes
+    together ~12.9% → ~2.2% CPU (busier window before), core memory
+    72–74 → 48–52 MB.
+  - The Inbox tab no longer refreshes every 60 s: the core announces when a
+    snooze ends (`inbox.changed`, reason `snooze_expired`).
+
+### Fixed
+
+- After WhatsApp answers the business-name lookup with "rate-overlimit"
+  (429), the core waits 24 h — across restarts — before asking again,
+  instead of drawing another refusal on every launch.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.

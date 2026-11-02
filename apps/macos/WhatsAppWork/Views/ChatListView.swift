@@ -97,14 +97,23 @@ struct ChatListView: View {
     }
 
     private var chatList: some View {
-        List(selection: selection) {
+        // Rows re-render only when their inputs change, and the time column
+        // reads "HH:mm" today but a date afterwards — so the day is an input.
+        let today = Calendar.current.startOfDay(for: Date())
+        return List(selection: selection) {
             NotesChatListRow(notes: state.notes)
                 .tag(Self.notesTag)
+            // No .tag(chat.jid): selection uses the ForEach ids (Chat.id is
+            // the jid). An explicit tag inside the closure made the List
+            // build every loaded row on every update just to read its tag.
             ForEach(state.chats) { chat in
                 ChatRow(chat: chat,
+                        preview: state.resolveBareMentionTokens(in: chat.last_preview ?? ""),
+                        nickKey: chat.kind == "group" ? "" : state.nickColorKey(for: chat.jid),
                         focus: state.focusMode,
-                        work: state.isWorkChat(chat.jid))
-                    .tag(chat.jid)
+                        today: today,
+                        actions: state)
+                    .equatable()
                     .onAppear {
                         if chat.jid == state.chats.last?.jid {
                             Task { await state.loadMoreChats() }
@@ -215,22 +224,40 @@ struct ChatListView: View {
 
 /// Equatable row: chats-array writes (every incoming message bumps it) skip
 /// identical rows instead of re-diffing 165 mono-styled rows on old Intel.
+/// Everything the row renders arrives as a value — it must not observe
+/// AppState, or every state change re-runs every visible row's body and the
+/// `==` gate never gets a say.
 struct ChatRow: View, Equatable {
     let chat: String
     let chatData: Chat
-    @EnvironmentObject var state: AppState
+    /// Preview with bare mention tokens resolved through the contact index.
+    let preview: String
+    /// Nick-color key for direct chats ("" for groups).
+    let nickKey: String
     let focusMode: Bool
     let isWork: Bool
+    /// Start of the current day: flips the time column from "HH:mm" to a
+    /// date at midnight without any change to the chat itself.
+    let today: Date
+    /// Action target only. A plain reference, deliberately not
+    /// @EnvironmentObject: reading it never subscribes the row to updates.
+    let actions: AppState
 
-    init(chat c: Chat, focus: Bool, work: Bool) {
+    init(chat c: Chat, preview: String, nickKey: String, focus: Bool, today: Date, actions: AppState) {
         chat = c.jid
         chatData = c
+        self.preview = preview
+        self.nickKey = nickKey
         focusMode = focus
-        isWork = work
+        isWork = (c.is_work ?? false) || (c.is_starred ?? false)
+        self.today = today
+        self.actions = actions
     }
 
     static func == (lhs: ChatRow, rhs: ChatRow) -> Bool {
-        lhs.chatData == rhs.chatData && lhs.focusMode == rhs.focusMode && lhs.isWork == rhs.isWork
+        lhs.chatData == rhs.chatData && lhs.focusMode == rhs.focusMode
+            && lhs.preview == rhs.preview && lhs.nickKey == rhs.nickKey
+            && lhs.today == rhs.today
     }
 
     var body: some View {
@@ -250,8 +277,8 @@ struct ChatRow: View, Equatable {
         if chatData.is_starred == true { parts.append("starred") }
         if chatData.is_work == true { parts.append("work") }
         if focusMode && !isWork { parts.append("muted in Focus Mode") }
-        if let preview = chatData.last_preview, !preview.isEmpty {
-            parts.append(state.resolveBareMentionTokens(in: preview))
+        if !preview.isEmpty {
+            parts.append(preview)
         }
         let time = Self.timeString(chatData.last_message_ts ?? 0)
         if !time.isEmpty { parts.append(time) }
@@ -260,18 +287,18 @@ struct ChatRow: View, Equatable {
 
     private var menu: some View {
         Group {
-            Button("Mark Read") { Task { await state.commitRead(chat, source: .mouse) } }
+            Button("Mark Read") { Task { await actions.commitRead(chat, source: .mouse) } }
             Divider()
             Button((chatData.is_starred ?? false) ? "Unstar" : "Star as Work Contact") {
-                Task { await state.setChatStarred(chat, starred: !(chatData.is_starred ?? false)) }
+                Task { await actions.setChatStarred(chat, starred: !(chatData.is_starred ?? false)) }
             }
             if chatData.kind == "group" {
                 Button((chatData.is_work ?? false) ? "Remove from Work Groups" : "Mark as Work Group") {
-                    Task { await state.setChatWork(chat, work: !(chatData.is_work ?? false)) }
+                    Task { await actions.setChatWork(chat, work: !(chatData.is_work ?? false)) }
                 }
             }
             if chatData.kind != "group" {
-                Button("Copy wa.me Link") { state.copyWaMeLink(forChat: chat) }
+                Button("Copy wa.me Link") { actions.copyWaMeLink(forChat: chat) }
             }
         }
     }
@@ -288,7 +315,7 @@ struct ChatRow: View, Equatable {
                     .foregroundStyle(.secondary)
                 Text(chatTitle)
                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(chatData.kind == "group" ? .primary : IRCPalette.nickColor(state.nickColorKey(for: chatData.jid)))
+                    .foregroundStyle(chatData.kind == "group" ? .primary : IRCPalette.nickColor(nickKey))
                     .lineLimit(1)
                 if chatData.is_starred == true {
                     Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
@@ -315,7 +342,7 @@ struct ChatRow: View, Equatable {
                 }
             }
             HStack {
-                Text(state.resolveBareMentionTokens(in: chatData.last_preview ?? ""))
+                Text(preview)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -327,7 +354,7 @@ struct ChatRow: View, Equatable {
         }
         .padding(.vertical, 1)
         .simultaneousGesture(TapGesture().onEnded {
-            Task { await state.openChatRow(chat, source: .mouse) }
+            Task { await actions.openChatRow(chat, source: .mouse) }
         })
     }
 

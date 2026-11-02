@@ -216,3 +216,81 @@ func BenchmarkInbox(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkNamesPassSteadyState is the storage share of one app name pass
+// (derive → mirror → rewrite → merge) when nothing is left to fix — the
+// shape of every pass a connected account re-runs as live @lid traffic
+// re-arms it. Fixture: N messages in 40 groups, 0.3% still carrying an
+// unmapped @lid sender, 6,000 PN↔LID mappings with named contacts on the
+// PN side only for half of them (already mirrored), 7,000 contacts.
+func BenchmarkNamesPassSteadyState(b *testing.B) {
+	st := openTestStore(b)
+	ctx := context.Background()
+	n := benchFixtureSize()
+	for g := 0; g < 40; g++ {
+		if err := st.EnsureChat(ctx, core.Chat{JID: fmt.Sprintf("12036300%04d@g.us", g), Kind: core.KindGroup}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	const mappings = 6000
+	lidToPN := make(map[string]string, mappings)
+	var contacts []core.Contact
+	for i := 0; i < 7000; i++ {
+		pn := fmt.Sprintf("62850%08d@s.whatsapp.net", i)
+		contacts = append(contacts, core.Contact{JID: pn, PushName: fmt.Sprintf("Sample %d", i), UpdatedAt: 1})
+		if i < mappings {
+			lid := fmt.Sprintf("%015d@lid", 100000000000000+i)
+			lidToPN[lid] = pn
+		}
+	}
+	if _, err := st.UpsertContacts(ctx, contacts); err != nil {
+		b.Fatal(err)
+	}
+	var buf []core.Message
+	for i := 0; i < n; i++ {
+		sender := fmt.Sprintf("62850%08d@s.whatsapp.net", i%7000)
+		if i%333 == 0 { // never-mapped LID senders stay behind
+			sender = fmt.Sprintf("%015d@lid", 900000000000000+i%500)
+		}
+		buf = append(buf, core.Message{
+			MessageID: fmt.Sprintf("m%d", i), ChatJID: fmt.Sprintf("12036300%04d@g.us", i%40),
+			SenderJID: sender, Timestamp: int64(1_700_000_000 + i), Kind: core.KindText,
+			Text: "group chatter", Source: "history", MentionedJIDs: []string{},
+		})
+		if len(buf) == 500 {
+			if _, err := st.InsertMessages(ctx, buf); err != nil {
+				b.Fatal(err)
+			}
+			buf = buf[:0]
+		}
+	}
+	if len(buf) > 0 {
+		if _, err := st.InsertMessages(ctx, buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+	pass := func() {
+		derived := map[string]string{}
+		for k, v := range lidToPN {
+			derived[k] = v
+		}
+		if err := st.DeriveSenderMappings(ctx, derived); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := st.MirrorLIDContactNames(ctx, derived); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := st.RewriteSenderJIDs(ctx, derived); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := st.MergeLIDChats(ctx, derived); err != nil {
+			b.Fatal(err)
+		}
+	}
+	pass() // first pass mirrors the twins; every later pass is steady state
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		pass()
+	}
+}

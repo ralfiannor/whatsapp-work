@@ -186,23 +186,17 @@ func (s *Store) MergeLIDChats(ctx context.Context, lidToPN map[string]string) (m
 		return nil, fmt.Errorf("storage: merge lid chats begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Only LID-keyed direct chats can fold: list those (the chats table is
+	// small) instead of probing once per known mapping — thousands of
+	// lookups per pass on a real account.
+	lidChats, err := lidDirectChatsTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	var firstErr error
-	for lid, pn := range lidToPN {
+	for _, lid := range lidChats {
+		pn := lidToPN[lid]
 		if !strings.HasSuffix(lid, "@lid") || pn == "" || pn == lid {
-			continue
-		}
-		var isDirect bool
-		if err := tx.QueryRowContext(ctx,
-			`SELECT kind = 'direct' FROM chats WHERE jid = ?`, lid).Scan(&isDirect); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue // no LID chat row: nothing to fold
-			}
-			if firstErr == nil {
-				firstErr = fmt.Errorf("storage: merge lid chat %s: probe: %w", lid, err)
-			}
-			continue // one bad mapping must not abort the rest
-		}
-		if !isDirect {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -302,6 +296,25 @@ func (s *Store) MergeLIDChats(ctx context.Context, lidToPN map[string]string) (m
 		}
 	}
 	return merged, nil
+}
+
+// lidDirectChatsTx lists direct chats still keyed by a peer's LID.
+func lidDirectChatsTx(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT jid FROM chats WHERE kind = 'direct' AND jid LIKE '%@lid'`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list lid chats: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, fmt.Errorf("storage: list lid chats scan: %w", err)
+		}
+		out = append(out, jid)
+	}
+	return out, rows.Err()
 }
 
 // MarkChatRead zeroes unread counters and advances the read position.

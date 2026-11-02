@@ -3,7 +3,7 @@
 Driver: `modernc.org/sqlite` (pure Go, FTS5 enabled). Two files in the data dir:
 
 - `app.db` — domain data (this document). WAL, `synchronous=NORMAL`, `busy_timeout=5000`,
-  `foreign_keys=ON`, `cache_size=-16000` (16 MB cap). Handles: 1 writer connection + 4-read pool.
+  `foreign_keys=ON`, `cache_size=-4000` (4 MB per connection). Handles: 1 writer connection + 4-read pool.
 - `session.db` — whatsmeow session store (its own schema, managed by whatsmeow). Treated as a
   credential: `0600`, never logged.
 

@@ -1,6 +1,13 @@
 package core
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrRateLimited reports that WhatsApp refused a query as rate-limited
+// (IQ 429 "rate-overlimit"). Callers back off instead of retrying.
+var ErrRateLimited = errors.New("whatsapp: rate limited")
 
 // WAClient is the narrow port between the application layer and the WhatsApp
 // protocol adapter. whatsmeow types never cross this boundary; the adapter

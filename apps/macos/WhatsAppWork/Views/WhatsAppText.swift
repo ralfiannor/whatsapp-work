@@ -149,6 +149,14 @@ enum IRCPalette {
 struct IRCLineText: View {
     let message: Message
     var fontSize: Double = 12.5
+    /// Own number (user part) for self-mention highlighting.
+    var ownUserPart: String
+    /// Contact-name generation; part of the cache key.
+    var namesVersion: Int
+    /// Name lookups on a cache miss only. A plain reference, not
+    /// @EnvironmentObject: this view must not re-render on every AppState
+    /// change — namesVersion carries the one change it cares about.
+    let names: AppState
 
     private static var cache: [String: AttributedString] = [:]
     private static let cacheLimit = 800
@@ -173,7 +181,7 @@ struct IRCLineText: View {
         // v11 key: adds kind/raw_kind — a placeholder row upgrades in place
         // (same id, often still empty text) when its content arrives, and
         // its label must not outlive the upgrade.
-        let key = "v11|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.kind)|\(message.raw_kind ?? "")|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(state.contactNamesVersion)"
+        let key = "v11|\(fontSize)|\(message.forwarded ?? false)|\(message.id)|\(message.kind)|\(message.raw_kind ?? "")|\(message.text ?? "")|\(message.edited_ts ?? 0)|\(message.revoked ? 1 : 0)|\(message.reactions?.count ?? 0)|\(message.receipt_status ?? "")|\(namesVersion)"
         if let hit = Self.cache[key] {
             return hit
         }
@@ -195,7 +203,7 @@ struct IRCLineText: View {
         guard let mentioned = message.mentioned_jids, !mentioned.isEmpty else { return [] }
         var out: Set<String> = []
         for jid in mentioned {
-            let name = state.nameFor(jid)
+            let name = names.nameFor(jid)
             if !name.isEmpty && !name.hasPrefix("+") && !name.hasPrefix("•••") {
                 out.insert("@" + name)
             }
@@ -220,7 +228,7 @@ struct IRCLineText: View {
         while let r = text.range(of: "@[0-9]{5,}", options: .regularExpression,
                                  range: cursor..<text.endIndex) {
             matched = true
-            let name = idx < mentioned.count ? state.nameFor(mentioned[idx]) : ""
+            let name = idx < mentioned.count ? names.nameFor(mentioned[idx]) : ""
             idx += 1
             out += text[cursor..<r.lowerBound]
             let real = !name.isEmpty && !name.hasPrefix("+") && !name.hasPrefix("•••")
@@ -232,11 +240,6 @@ struct IRCLineText: View {
         return out == text ? nil : out
     }
 
-    @EnvironmentObject private var state: AppState
-    private var ownUserPart: String {
-        guard let jid = state.ownJID else { return "" }
-        return String(jid.prefix(while: { $0 != "@" }))
-    }
 
     private static let mentionRE = try? NSRegularExpression(pattern: "@[A-Za-z0-9_]{4,}")
 

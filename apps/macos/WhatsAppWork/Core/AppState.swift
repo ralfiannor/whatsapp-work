@@ -94,7 +94,13 @@ final class AppState: ObservableObject {
     @Published private(set) var notesOpen = false
     /// Focus Mode: only work-marked chats (work groups + starred work
     /// contacts) may notify or feed the dock badge; everything else silent.
-    @AppStorage("focusMode") var focusMode = false
+    /// A published in-memory copy of the "focusMode" default, not
+    /// @AppStorage: outside a view every @AppStorage read is a CFPreferences
+    /// lookup, and the chat sort reads this per comparison on every event
+    /// (~25% of idle main-thread time on a real account, 2026-11-02).
+    @Published var focusMode = UserDefaults.standard.bool(forKey: "focusMode") {
+        didSet { UserDefaults.standard.set(focusMode, forKey: "focusMode") }
+    }
     /// Privacy: DM read receipts are suppressed unless the user opts back
     /// in (Settings ▸ "Don't send read receipts in direct messages").
     @AppStorage("suppressDMReadReceipts") var suppressDMReadReceipts = true
@@ -384,7 +390,12 @@ final class AppState: ObservableObject {
                     authoritativeEpoch: epoch
                 )
                 switch result {
-                case .succeeded: return .success
+                case .succeeded:
+                    // Inbox events missed while the socket was down (a snooze
+                    // lapsing, done/star elsewhere) never replay: refetch the
+                    // visible inbox with the chats.
+                    if self.sidebarTab == .inbox { self.scheduleInboxRefresh() }
+                    return .success
                 case .failed: return .chatFetchFailed
                 case .queued, .cancelled: return .cancelled
                 }
@@ -619,6 +630,7 @@ final class AppState: ObservableObject {
         }
         for (chat, rows) in byChat {
             guard var list = messagesByChat[chat] else { continue }
+            var changed = false
             for (rowID, m) in rows {
                 if let i = list.firstIndex(where: { $0.id == rowID }) {
                     if list[i] == m { continue } // unchanged row: no invalidation churn
@@ -627,7 +639,11 @@ final class AppState: ObservableObject {
                     list.append(m)
                     MessageTimelineOrder.sort(&list)
                 }
+                changed = true
             }
+            // Every write publishes and re-renders the window: skip it when
+            // the whole batch matched what the transcript already shows.
+            guard changed else { continue }
             messagesByChat[chat] = trimmedTranscript(list, for: chat)
         }
     }
@@ -1013,6 +1029,7 @@ final class AppState: ObservableObject {
     /// cursor). Focus Mode hoists work contacts and work groups above
     /// everything else; both buckets keep the same recency order inside.
     private func sortChats() {
+        let focusMode = focusMode
         chats.sort { a, b in
             if focusMode {
                 let aWork = (a.is_work ?? false) || (a.is_starred ?? false)
@@ -2873,6 +2890,9 @@ final class AppState: ObservableObject {
                 _ = await self?.runRecoveryPoll(now: Date())
             }
         }
+        // A fallback that no-ops while the WS is fresh: let macOS batch its
+        // wakeup with others instead of waking the CPU on the dot.
+        pollTimer?.tolerance = 5
     }
 
     @discardableResult
@@ -2912,6 +2932,9 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, let client = self.runtimeClient else { return }
                 _ = await self.refreshSession(client, includeChats: true, chatSource: .wake)
+                // The core's snooze-expiry timer runs late across system
+                // sleep; a visible inbox catches up here.
+                if self.sidebarTab == .inbox { self.scheduleInboxRefresh() }
             }
         }
     }

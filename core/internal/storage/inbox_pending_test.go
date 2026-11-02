@@ -178,7 +178,7 @@ func TestMigrationV16DropsIneligiblePending(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO local_message_state (message_id, done, snoozed_until, starred, priority)
 		SELECT id, 0, NULL, 0, 0 FROM messages WHERE true ON CONFLICT (message_id) DO NOTHING;
-		DELETE FROM schema_migrations WHERE version = 16;`); err != nil {
+		DELETE FROM schema_migrations WHERE version >= 16;`); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()

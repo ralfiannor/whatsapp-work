@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,11 @@ type App struct {
 	// syncDoneTimer ends a stuck "syncing" state when the server's final
 	// progress payload never arrives (quiet-period fallback).
 	syncDoneTimer *time.Timer
+
+	// snoozeWake fires inbox.changed at the next snooze deadline; snoozeMu
+	// serializes re-arming so a stale deadline never replaces a newer one.
+	snoozeMu   sync.Mutex
+	snoozeWake *time.Timer
 
 	nameMu         sync.Mutex
 	nameResolveDue *time.Timer
@@ -158,6 +164,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.store.RecomputeUnreadCounters(ctx); err != nil {
 		a.log.Warn("app: unread counter recompute", "err", err)
 	}
+	a.armSnoozeWake()
 	go a.loop(ctx)
 	go func() {
 		t := time.NewTicker(60 * time.Second)
@@ -829,11 +836,26 @@ func (a *App) resolveNames(ctx context.Context) {
 	}
 }
 
+// usyncBackoff is how long a rate-limited usync name pass stays off.
+const (
+	usyncBackoffKey = "usync_names_backoff_until"
+	usyncBackoff    = 24 * time.Hour
+)
+
 // usyncNamePass titles direct chats whose name never resolved (business
 // senders withhold push names) via the usync verified-name directory.
 func (a *App) usyncNamePass(ctx context.Context, log *slog.Logger, lidToPN map[string]string) {
 	if a.State() != core.StateConnected {
 		return
+	}
+	// A rate-limit answer is a signal to stop asking, across restarts: the
+	// pass runs once per launch, and on an account WhatsApp already throttles
+	// every launch used to send a query that drew another 429.
+	if v, err := a.store.Setting(ctx, usyncBackoffKey); err == nil {
+		if until, _ := strconv.ParseInt(v, 10, 64); time.Now().Unix() < until {
+			log.Info("names stage", "stage", "usync", "skipped", "rate-limit backoff", "until", until)
+			return
+		}
 	}
 	chats, err := a.store.ListChatsForNames(ctx)
 	if err != nil {
@@ -865,6 +887,14 @@ func (a *App) usyncNamePass(ctx context.Context, log *slog.Logger, lidToPN map[s
 	for i := 0; i < len(order); i += batch {
 		end := min(i+batch, len(order))
 		names, err := a.wa.UserNames(ctx, order[i:end])
+		if errors.Is(err, core.ErrRateLimited) {
+			until := time.Now().Add(usyncBackoff).Unix()
+			if err := a.store.SetSetting(ctx, usyncBackoffKey, strconv.FormatInt(until, 10)); err != nil {
+				a.ingestError("usync names: persist backoff", err)
+			}
+			log.Warn("names stage", "stage", "usync", "rate_limited_until", until)
+			return
+		}
 		if err != nil {
 			a.ingestError("usync names", err)
 			return // network trouble: stop, retry next launch
@@ -1440,6 +1470,41 @@ func (a *App) GroupMembers(ctx context.Context, groupJID string) ([]core.GroupMe
 // when its inbox tab is visible; the event is a hint, never a payload.
 func (a *App) emitInboxChanged(reason string) {
 	a.emit("inbox.changed", map[string]any{"reason": reason})
+	a.armSnoozeWake() // every inbox mutation may move the next deadline
+}
+
+// armSnoozeWake schedules one inbox.changed ("snooze_expired") for the next
+// snooze deadline. Expiry is a query-time rule — no write happens when a
+// snooze lapses — so without this the client had to poll /inbox to see a
+// conversation come back. Re-armed after every inbox mutation and on fire.
+func (a *App) armSnoozeWake() {
+	ctx := a.runCtx
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
+	a.snoozeMu.Lock()
+	defer a.snoozeMu.Unlock()
+	if a.snoozeWake != nil {
+		a.snoozeWake.Stop()
+		a.snoozeWake = nil
+	}
+	next, err := a.store.NextSnoozeExpiry(ctx, time.Now().Unix())
+	if err != nil {
+		a.log.Warn("app: next snooze expiry", "err", err)
+		return
+	}
+	if next == 0 {
+		return
+	}
+	// The inbox shows an item once snoozed_until <= now in whole seconds:
+	// fire just inside the deadline's second.
+	wait := time.Until(time.Unix(next, 0)) + 500*time.Millisecond
+	a.snoozeWake = time.AfterFunc(wait, func() {
+		if ctx.Err() != nil {
+			return // shut down: the dispatcher's channels are closed
+		}
+		a.emitInboxChanged("snooze_expired")
+	})
 }
 
 // Inbox assembles the actionable work inbox.

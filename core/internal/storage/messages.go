@@ -730,9 +730,17 @@ func (s *Store) RewriteSenderJIDs(ctx context.Context, lidToPN map[string]string
 		return 0, fmt.Errorf("storage: rewrite senders begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Only LIDs that still sender-key a row can change anything: walk those
+	// (idx_messages_lid_sender, a few hundred rows) instead of issuing two
+	// statements per known mapping — thousands per pass on a real account.
+	present, err := lidSendersTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
 	var total int64
 	var firstErr error
-	for lid, pn := range lidToPN {
+	for _, lid := range present {
+		pn := lidToPN[lid]
 		if !strings.HasSuffix(lid, "@lid") || pn == "" {
 			continue
 		}
@@ -783,6 +791,27 @@ func (s *Store) RewriteSenderJIDs(ctx context.Context, lidToPN map[string]string
 	return total, nil
 }
 
+// lidSendersTx lists the distinct @lid sender JIDs still stored on rows.
+// The substr term must stay identical to idx_messages_lid_sender's WHERE or
+// the planner falls back to scanning messages.
+func lidSendersTx(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT DISTINCT sender_jid FROM messages WHERE substr(sender_jid, -4) = '@lid'`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list lid senders: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, fmt.Errorf("storage: list lid senders scan: %w", err)
+		}
+		out = append(out, jid)
+	}
+	return out, rows.Err()
+}
+
 // UnsupportedLabel gives empty-content rows an honest, specific placeholder.
 // The app's transcript mirrors this table (MessageTextRenderer).
 func UnsupportedLabel(rawKind string) string {
@@ -821,18 +850,22 @@ func UnsupportedLabel(rawKind string) string {
 // usual case) stay unmapped there, so the stored evidence is the only
 // source. Fresh mappings win on conflict.
 func (s *Store) DeriveSenderMappings(ctx context.Context, into map[string]string) error {
-	// MATERIALIZED forces the LID side to resolve first (a few hundred rows
-	// via a single scan) so the join per row stays index-driven. Unhinted,
-	// modernc's planner drove from the PN side — a 534k-row nested loop that
-	// burned a full core for minutes per names pass.
+	// MATERIALIZED resolves the LID side first: a few hundred rows read from
+	// idx_messages_lid_sender (its WHERE must match this substr term exactly).
+	// CROSS JOIN pins that set as the outer loop and INDEXED BY makes each
+	// probe a message_id seek (ids are near-unique). Unhinted, modernc's
+	// planner drove from the PN side — a 534k-row nested loop that burned a
+	// full core for minutes per names pass — or seeked the autoindex on
+	// chat_jid alone, walking a whole busy group per LID row.
 	rows, err := s.r.QueryContext(ctx, `
 		WITH lid_rows AS MATERIALIZED (
 			SELECT chat_jid, message_id, sender_jid FROM messages
-			WHERE sender_jid LIKE '%@lid'
+			WHERE substr(sender_jid, -4) = '@lid'
 		)
 		SELECT DISTINCT lid_rows.sender_jid, p.sender_jid
 		FROM lid_rows
-		JOIN messages p ON p.chat_jid = lid_rows.chat_jid
+		CROSS JOIN messages p INDEXED BY idx_messages_msgid
+			ON p.chat_jid = lid_rows.chat_jid
 			AND p.message_id = lid_rows.message_id
 			AND p.sender_jid LIKE '%@s.whatsapp.net'`)
 	if err != nil {

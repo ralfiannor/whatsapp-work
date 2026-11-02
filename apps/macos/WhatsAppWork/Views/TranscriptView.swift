@@ -292,7 +292,12 @@ private struct MessageList: View, Equatable {
                             MessageBubble(message: m, highlighted: m.id == flashID,
                                           timeColumn: timeColumnWidth, nickColumn: nickColumn,
                                           fontSize: fontSize, rowPadding: rowPadding,
+                                          labels: MessageBubble.Labels(m, from: state),
+                                          image: state.mediaImages[m.id],
+                                          mediaBusy: state.mediaBusy.contains(m.id),
+                                          actions: state,
                                           onJumpQuote: { id in jumpToMessage(id, proxy: proxy) })
+                                .equatable()
                         }
                         .tag(m.id)
                         .id(m.id)
@@ -1236,16 +1241,58 @@ private struct AttachmentChip: View {
     }
 }
 
-struct MessageBubble: View {
+/// Equatable row, fed values only: a bubble that observed AppState re-ran its
+/// body (and its text and media children) on every state change — every
+/// incoming event in any chat re-rendered every visible row of the open one.
+struct MessageBubble: View, Equatable {
+    /// Everything a row shows that comes from the contact directory.
+    struct Labels: Equatable {
+        var nick: String
+        var nickColorKey: String
+        /// Quoted text with bare mention tokens resolved (nil: no quote).
+        var quote: String?
+        var replyAuthor: String
+        var ownUserPart: String
+        /// Bumps when contact names reload: re-renders mention labels.
+        var namesVersion: Int
+
+        @MainActor init(_ m: Message, from state: AppState) {
+            nick = state.ircNick(for: m)
+            nickColorKey = m.from_me ? "" : state.nickColorKey(for: m.sender_jid)
+            if let quoted = m.quoted_text, !quoted.isEmpty {
+                quote = state.resolveBareMentionTokens(in: quoted)
+                replyAuthor = state.nameFor(m.reply_to_sender ?? "")
+            } else {
+                quote = nil
+                replyAuthor = ""
+            }
+            ownUserPart = state.ownJID.map { String($0.prefix(while: { $0 != "@" })) } ?? ""
+            namesVersion = state.contactNamesVersion
+        }
+    }
+
     let message: Message
     var highlighted: Bool = false
     var timeColumn: CGFloat = 62
     var nickColumn: CGFloat = 72
     var fontSize: Double = 12.5
     var rowPadding: CGFloat = 0.5
+    let labels: Labels
+    /// Decoded preview for visual media (nil until loaded).
+    var image: NSImage?
+    var mediaBusy = false
+    /// Action target only: never read while rendering.
+    let actions: AppState
     var onJumpQuote: (String) -> Void = { _ in }
-    @EnvironmentObject var state: AppState
     @State private var quoteHover = false
+
+    static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
+        lhs.message == rhs.message && lhs.highlighted == rhs.highlighted
+            && lhs.timeColumn == rhs.timeColumn && lhs.nickColumn == rhs.nickColumn
+            && lhs.fontSize == rhs.fontSize && lhs.rowPadding == rhs.rowPadding
+            && lhs.labels == rhs.labels && lhs.image === rhs.image
+            && lhs.mediaBusy == rhs.mediaBusy
+    }
 
     /// weechat-style table row: fixed right-aligned time column, fixed
     /// right-aligned nick column, then the text — so every message starts at
@@ -1257,7 +1304,7 @@ struct MessageBubble: View {
                 .foregroundStyle(.secondary)
                 .frame(width: timeColumn, alignment: .trailing)
 
-            Text(state.ircNick(for: message))
+            Text(labels.nick)
                 .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
                 .foregroundStyle(nickColor)
                 .lineLimit(2)
@@ -1266,7 +1313,7 @@ struct MessageBubble: View {
                 .padding(.leading, 12)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    state.openProfileRequest(for: message.sender_jid, in: message.chat_jid)
+                    actions.openProfileRequest(for: message.sender_jid, in: message.chat_jid)
                 }
                 .help("Click to view profile")
 
@@ -1289,17 +1336,19 @@ struct MessageBubble: View {
                     }
                     .padding(.leading, 4)
                 }
-                if let quoted = message.quoted_text, !quoted.isEmpty {
+                if let quoted = labels.quote {
                     // Quoted text carries raw mention tokens (the quoted
-                    // message's own mentioned_jids are gone) — resolve
-                    // numeric tokens through the contact index.
-                    quoteLine(state.resolveBareMentionTokens(in: quoted))
+                    // message's own mentioned_jids are gone) — Labels
+                    // resolved numeric tokens through the contact index.
+                    quoteLine(quoted)
                         .onTapGesture { onJumpQuote(message.reply_to_id ?? "") }
                         .onHover { quoteHover = $0 }
                         .opacity(quoteHover ? 1 : 0.85)
                         .help("Jump to quoted message")
                 }
-                IRCLineText(message: message, fontSize: fontSize)
+                IRCLineText(message: message, fontSize: fontSize,
+                            ownUserPart: labels.ownUserPart,
+                            namesVersion: labels.namesVersion, names: actions)
                     .padding(.leading, 4)
                 failedLine
                 mediaAttachment
@@ -1310,12 +1359,12 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(highlightBackground)
         .contextMenu { menu }
-        .onAppear { state.messageRowDidAppearProxy(rowID: message.id) }
+        .onAppear { actions.messageRowDidAppearProxy(rowID: message.id) }
     }
 
     private var nickColor: Color {
         message.from_me ? Color(red: 0.95, green: 0.60, blue: 0.15)
-                        : IRCPalette.nickColor(state.nickColorKey(for: message.sender_jid))
+                        : IRCPalette.nickColor(labels.nickColorKey)
     }
 
     /// weechat highlight: lines that mention you get a full-row tint.
@@ -1344,7 +1393,7 @@ struct MessageBubble: View {
     private func quoteLine(_ quoted: String) -> some View {
         (Text("↩ ").foregroundColor(.secondary)
             .font(.system(size: fontSize - 1.5, design: .monospaced))
-        + Text(replyAuthor).foregroundColor(.secondary)
+        + Text(labels.replyAuthor).foregroundColor(.secondary)
             .font(.system(size: fontSize - 1.5, weight: .semibold, design: .monospaced))
         + Text(": ").foregroundColor(.secondary)
             .font(.system(size: fontSize - 1.5, design: .monospaced))
@@ -1357,7 +1406,8 @@ struct MessageBubble: View {
     @ViewBuilder
     private var mediaAttachment: some View {
         if let media = message.media, !message.revoked {
-            MediaBubble(message: message, media: media)
+            MediaBubble(message: message, media: media, image: image,
+                        busy: mediaBusy, actions: actions)
                 .frame(maxWidth: 220, maxHeight: 200, alignment: .leading)
                 .padding(.leading, 4)
         }
@@ -1375,14 +1425,14 @@ struct MessageBubble: View {
                         // In LID-addressed groups our own reaction is stored
                         // under the @lid twin — compare both forms or the
                         // toggle re-reacts instead of removing.
-                        let ownLID = state.chatMembers[message.chat_jid]?
-                            .first { $0.jid == state.ownJID }?.lid
+                        let ownLID = actions.chatMembers[message.chat_jid]?
+                            .first { $0.jid == actions.ownJID }?.lid
                         let mine = g.users.contains {
-                            $0.reactor_jid == state.ownJID
+                            $0.reactor_jid == actions.ownJID
                                 || (ownLID != nil && $0.reactor_jid == ownLID)
                         }
                         Task {
-                            await state.react(rowID: message.id, emoji: mine ? "" : g.emoji)
+                            await actions.react(rowID: message.id, emoji: mine ? "" : g.emoji)
                         }
                     } label: {
                         Text("\(g.emoji) \(g.users.count)")
@@ -1412,7 +1462,7 @@ struct MessageBubble: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.red)
                 if canRetry {
-                    Button("Retry") { Task { await state.retrySend(message) } }
+                    Button("Retry") { Task { await actions.retrySend(message) } }
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .buttonStyle(.plain)
                         .foregroundStyle(Color.accentColor)
@@ -1433,12 +1483,12 @@ struct MessageBubble: View {
             // Media failures get no Retry: bytes are gone after the first
             // attempt; the row's inline line tells the user to re-attach.
             if canRetry {
-                Button("Retry send") { Task { await state.retrySend(message) } }
+                Button("Retry send") { Task { await actions.retrySend(message) } }
                 Divider()
             }
             Button("Reply") {
-                state.setReply(message, for: message.chat_jid)
-                state.composerFocusRequest += 1
+                actions.setReply(message, for: message.chat_jid)
+                actions.composerFocusRequest += 1
             }
                 .keyboardShortcut("r", modifiers: [])
             if let text = message.text, !text.isEmpty {
@@ -1450,44 +1500,45 @@ struct MessageBubble: View {
             // id > 0: optimistic temp rows have negative ids — the server
             // has no message to revoke, Delete would 404.
             if message.from_me && !message.revoked && message.id > 0 {
-                Button("Delete…") { state.requestDeleteMessage(message) }
+                Button("Delete…") { actions.requestDeleteMessage(message) }
             }
             if message.chat_jid.hasSuffix("@g.us") && !message.from_me {
-                Button("Mention @\(state.ircNick(for: message))") {
-                    state.insertMention(from: message)
+                Button("Mention @\(labels.nick)") {
+                    actions.insertMention(from: message)
                 }
             }
             Divider()
             ForEach(ReactionPanel.emojis, id: \.self) { emoji in
-                Button(emoji) { Task { await state.react(rowID: message.id, emoji: emoji) } }
+                Button(emoji) { Task { await actions.react(rowID: message.id, emoji: emoji) } }
             }
             Divider()
             Button(message.done == true ? "Mark Not Done" : "✓ Done") {
-                Task { await state.markDone(message, done: !(message.done ?? false)) }
+                Task { await actions.markDone(message, done: !(message.done ?? false)) }
             }
                 .keyboardShortcut("d", modifiers: [])
             Button("Snooze 1 hour") {
-                Task { await state.snoozeMessage(rowID: message.id, until: AppState.snoozeOneHour, label: "1 hour") }
+                Task { await actions.snoozeMessage(rowID: message.id, until: AppState.snoozeOneHour, label: "1 hour") }
             }
                 .keyboardShortcut("s", modifiers: [])
             Button("Snooze until tomorrow 09:00") {
-                Task { await state.snoozeMessage(rowID: message.id, until: AppState.nextMorning(), label: "tomorrow 9am") }
+                Task { await actions.snoozeMessage(rowID: message.id, until: AppState.nextMorning(), label: "tomorrow 9am") }
             }
             Button(message.starred == true ? "Unstar" : "Star") {
-                Task { await state.starMessage(message) }
+                Task { await actions.starMessage(message) }
             }
         }
     }
 
-    private var replyAuthor: String {
-        state.nameFor(message.reply_to_sender ?? "")
-    }
 }
 
+/// Rendered inside MessageBubble's Equatable gate: the decoded image and the
+/// busy flag arrive as values, AppState only as an action target.
 struct MediaBubble: View {
     let message: Message
     let media: MessageMedia
-    @EnvironmentObject var state: AppState
+    let image: NSImage?
+    let busy: Bool
+    let actions: AppState
 
     private var isVisualMedia: Bool {
         media.kind == "image" || media.kind == "sticker"
@@ -1498,7 +1549,7 @@ struct MediaBubble: View {
             // Stickers behave exactly like images: tap-to-load, decoded
             // preview in the bubble, tap for full view (animated stickers
             // show their first frame).
-            if isVisualMedia, let img = state.mediaImages[message.id] {
+            if isVisualMedia, let img = image {
                 Image(nsImage: img)
                     .resizable()
                     .interpolation(.none)
@@ -1506,7 +1557,7 @@ struct MediaBubble: View {
                     .frame(maxWidth: 220, maxHeight: 200)
                     .clipShape(RoundedRectangle(cornerRadius: 2))
                     .contentShape(Rectangle())
-                    .onTapGesture { Task { await state.openPreview(message) } }
+                    .onTapGesture { Task { await actions.openPreview(message) } }
                     .help("Click to preview")
             } else if media.state == "downloaded" {
                 // Non-image media: open with the system default handler.
@@ -1515,7 +1566,7 @@ struct MediaBubble: View {
                 } label: {
                     Label(openLabel, systemImage: openIcon)
                 }
-            } else if state.mediaBusy.contains(message.id) {
+            } else if busy {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Downloading…").font(.callout).foregroundStyle(.secondary)
@@ -1526,7 +1577,7 @@ struct MediaBubble: View {
                     Label("Download failed — retry", systemImage: "arrow.clockwise")
                 }
             } else {
-                Button { Task { await state.ensureMedia(message) } } label: {
+                Button { Task { await actions.ensureMedia(message) } } label: {
                     Label("\(media.kind.capitalized) · \(ByteCountFormatter.string(fromByteCount: media.size, countStyle: .file)) — tap to load",
                           systemImage: icon)
                 }
@@ -1561,16 +1612,16 @@ struct MediaBubble: View {
         // dialog), write, then reveal the file in Finder.
         Task {
             if isVisualMedia {
-                await state.ensureMedia(message)
+                await actions.ensureMedia(message)
                 return
             }
-            await state.saveMediaToDisk(message)
+            await actions.saveMediaToDisk(message)
         }
     }
 
     private func retry() async {
         // failed → core treats any non-downloaded as fetchable
-        await state.ensureMedia(message)
+        await actions.ensureMedia(message)
     }
 }
 

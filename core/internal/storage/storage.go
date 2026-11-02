@@ -37,11 +37,16 @@ func ensureOwnerOnly(path string) error {
 	return os.Chmod(path, 0o600)
 }
 
+// cache_size is per connection (1 writer + 4 readers): 4 MB each. On a real
+// 640k-message DB, 16 MB per connection bought no measurable latency (chat
+// page, FTS search, inbox) over 4 MB, yet held ~34 MB more in SQLite's
+// allocator — which keeps freed pages mapped, so a cache that filled once
+// stayed in the footprint for good. 2 MB began to cost (inbox +12%).
 const pragmas = "_pragma=busy_timeout(5000)" +
 	"&_pragma=journal_mode(WAL)" +
 	"&_pragma=synchronous(NORMAL)" +
 	"&_pragma=foreign_keys(ON)" +
-	"&_pragma=cache_size(-16000)"
+	"&_pragma=cache_size(-4000)"
 
 // Store owns the app.db handles.
 type Store struct {
@@ -120,4 +125,27 @@ func (s *Store) Close() error {
 		return errW
 	}
 	return errR
+}
+
+// Setting reads one app_settings value; ErrNotFound when unset.
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.r.QueryRowContext(ctx, `SELECT value FROM app_settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("storage: setting %s: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetSetting writes one app_settings value.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	if _, err := s.w.ExecContext(ctx, `
+		INSERT INTO app_settings (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+		return fmt.Errorf("storage: set setting %s: %w", key, err)
+	}
+	return nil
 }

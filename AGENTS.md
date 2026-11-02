@@ -61,6 +61,9 @@ WW_BENCH_N=150000 go test ./internal/storage -run XXX -bench . -benchmem
 A change is not done until: Go tests + race green, app builds, and — for
 anything touching a hot path — a before/after measurement (bench, EXPLAIN
 QUERY PLAN, or `ps` sampling). Claims without numbers get reverted.
+Memory numbers come from `footprint` (what Activity Monitor shows), with
+RSS alongside: on a memory-pressured 8 GB Mac, RSS leaves out compressed
+pages and under-reports (6x for a long-idle core, 2026-11-02).
 
 ## Go rules
 
@@ -86,8 +89,11 @@ atomics; the `namesPending`/`nameGen` pair shows the pattern for
 
 ## SQLite rules
 
-- WAL, `synchronous=NORMAL`, `busy_timeout=5000`. One writer connection +
-  4-reader pool. Never open a connection per request.
+- WAL, `synchronous=NORMAL`, `busy_timeout=5000`, `cache_size=-4000` per
+  connection. One writer connection + 4-reader pool. Never open a
+  connection per request. modernc's allocator keeps freed pages mapped, so
+  every page a cache ever held stays in the core's footprint: grow
+  `cache_size` only with a latency measurement on a real-size DB.
 - Pagination is keyset `(timestamp, id)` — no OFFSET, no `SELECT *`.
 - Every hot query gets `EXPLAIN QUERY PLAN` before merge. A `SCAN messages`
 in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
@@ -106,6 +112,22 @@ in a request path is a bug. Full-scan diagnostics (COUNT/GROUP BY) are for
   cheap: `Equatable` row views gate re-diffs; memoize expensive
   attributed strings (and version the cache key when the render pipeline
   changes — stale caches shipped two visual bugs already).
+- A row holding `@EnvironmentObject` (or `@ObservedObject`) re-runs its
+  body on EVERY `AppState` change — its `==` is never consulted. Pass rows
+  plain values, plus a plain `AppState` reference for actions (`ChatRow`,
+  `MessageBubble` + `MessageBubble.Labels`, `IRCLineText`).
+- In `List(selection:)`, don't `.tag(id)` rows of a `ForEach` over
+  `Identifiable` data whose id is the selection type: the ids already are
+  the tags, and an explicit tag inside the row closure makes the List build
+  every loaded row on each update (≈950 chats) just to read it.
+- **Do not move `AppState` to `@Observable` while macOS 14 is supported.**
+  Tried 2026-11-02: SwiftUI on 14.x keeps a view's old observation tracking
+  until a property it read changes, so reads of rarely-changing state
+  (`contactNames`) pile up per re-render — `ObservationTracking` objects and
+  the registrar grew without bound, app footprint +8 MB/min under traffic.
+- No `@AppStorage` inside `AppState`: outside a view every read is a
+  CFPreferences lookup. Keep a `@Published` copy and write the default in
+  `didSet` (`focusMode` sat in the chat sort comparator: 24% of idle CPU).
 - **No AppKit text views per transcript row.** NSTextView per row stuttered
   scrolling on Intel; we rolled it back to SwiftUI `Text`. Accept the
   missing link-cursor; do not re-introduce without a scroll-perf

@@ -211,6 +211,14 @@ func (s *Store) MirrorLIDContactNames(ctx context.Context, lidToPN map[string]st
 		return 0, fmt.Errorf("storage: mirror contacts begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// One snapshot of every contact's names (a few thousand short rows),
+	// kept current as this loop writes: the upsert below runs only for a
+	// pair whose source has a field the target lacks. At steady state that
+	// is none, instead of two statements per mapping on every name pass.
+	names, err := contactNamesTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
 	var copied int64
 	for lid, pn := range lidToPN {
 		if lid == "" || pn == "" || lid == pn {
@@ -219,6 +227,16 @@ func (s *Store) MirrorLIDContactNames(ctx context.Context, lidToPN map[string]st
 		// Both directions: lid→pn and pn→lid.
 		for _, pair := range [][2]string{{lid, pn}, {pn, lid}} {
 			src, dst := pair[0], pair[1]
+			from, ok := names[src]
+			if !ok || from == (contactNameFields{}) {
+				continue // nothing to copy
+			}
+			to, exists := names[dst]
+			filled := to.fillFrom(from)
+			if exists && filled == to {
+				continue // target already has every field the source has
+			}
+			names[dst] = filled
 			res, err := tx.ExecContext(ctx, `
 				INSERT INTO contacts (jid, full_name, push_name, business_name, updated_at)
 				SELECT ?, c.full_name, c.push_name, c.business_name, ?
@@ -248,4 +266,41 @@ func (s *Store) MirrorLIDContactNames(ctx context.Context, lidToPN map[string]st
 		return copied, fmt.Errorf("storage: mirror contacts commit: %w", err)
 	}
 	return copied, nil
+}
+
+// contactNameFields is one contact row's name columns.
+type contactNameFields struct{ full, push, business string }
+
+// fillFrom mirrors the upsert's rule: a field gains the source's value only
+// while it is empty.
+func (c contactNameFields) fillFrom(src contactNameFields) contactNameFields {
+	if c.full == "" {
+		c.full = src.full
+	}
+	if c.push == "" {
+		c.push = src.push
+	}
+	if c.business == "" {
+		c.business = src.business
+	}
+	return c
+}
+
+func contactNamesTx(ctx context.Context, tx *sql.Tx) (map[string]contactNameFields, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT jid, full_name, push_name, business_name FROM contacts`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: snapshot contact names: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]contactNameFields{}
+	for rows.Next() {
+		var jid string
+		var c contactNameFields
+		if err := rows.Scan(&jid, &c.full, &c.push, &c.business); err != nil {
+			return nil, fmt.Errorf("storage: snapshot contact names scan: %w", err)
+		}
+		out[jid] = c
+	}
+	return out, rows.Err()
 }
