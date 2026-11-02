@@ -14,7 +14,7 @@ Environment of record: MacBook Pro 2018 (Intel), macOS 14, AC power, no other lo
 | Core ready (sidecar → READY line) | < 200 ms | `log stream`/signpost: process exec → stdout READY. `launch_time` metric in `/healthz` later. |
 | App cold start → first useful frame | < 1.0 s | Instruments App Launch template and its validated presentation evidence. The chat-list run-loop signpost is correlation only. (Realistic on Intel: SwiftUI init alone is 300–600 ms; budget includes sidecar spawn overlap — core starts before first frame.) |
 | Idle CPU (both processes) | ≤ 1% avg over 5 min, no wakeups > 5/s sustained | Activity Monitor sample + `powermetrics` 5-min capture; Go side: `go tool pprof` goroutine/wakeup audit. No polling anywhere; WS heartbeat is 1 frame/25 s. |
-| Idle memory (RSS, both) | core < 60 MB · app < 90 MB · combined < 150 MB | `footprint`/Activity Monitor after 10 min idle post-sync. Knobs: `GOMEMLIMIT=64MiB`, SQLite `cache_size=-16000`, no decoded images cached. |
+| Idle memory (footprint, both) | core < 60 MB · app < 90 MB · combined < 150 MB | `footprint` (= Activity Monitor "Memory") after 10 min idle post-sync; RSS reported alongside but never alone — it omits compressed pages (see 2026-11-02). Knobs: `GOMEMLIMIT=64MiB`, SQLite `cache_size=-4000` per connection, no decoded images cached. |
 | Working-set memory | < 250 MB combined | Footprint during 30 min of active chat use with images. |
 | Chat switch | < 100 ms p95 perceived | Instruments presentation evidence: chat select → first compositor-presented frame containing the selected page. The signpost records fetch/merge plus a queued SwiftUI view-update proxy separately. |
 | Local search (FTS, 150k msgs) | < 100 ms p95 | `go test -bench` with synthetic 150k-message fixture (`storage` bench); later UI-side signpost. |
@@ -582,3 +582,164 @@ before `LIMIT`. Machine: MacBookPro15,2 (i5-8259U), macOS 14.8.
 `EXPLAIN QUERY PLAN`: the inbox query still scans `idx_local_state_pending`
 with rowid lookups; the Work-toggle backfill/cleanup and Done statements use
 `idx_messages_chat_ts`; the ingest insert is a rowid lookup. No `SCAN messages`.
+
+## Idle CPU & memory — 2026-11-02
+
+Machine: MacBookPro15,2 (i5-8259U, 8 GB), macOS 14.8.9, Xcode 16.2, Go 1.26.6
+toolchain. Live, connected account: ~640k messages, ~950 chats, ~7.1k
+contacts, ~5.9k LID↔phone mappings; it keeps receiving group traffic
+(~330 messages/hour), so "idle" means no user input, not no events.
+
+**Method.** Release builds of both sides (`scripts/build-core.sh`, then
+`xcodebuild -configuration Release`), launched fresh against the same data
+directory, left 10 minutes to settle, then sampled for 300 s:
+`ps -axo pid,pcpu,rss,comm` once per second (the handoff loop above),
+`footprint <pid>` every 60 s, and the processes' cumulative CPU time
+(`ps -o time`) at both ends — CPU % below is that delta over wall time, which
+is exact where `pcpu` is a decaying average. UI state for every run: main
+window visible, Chats tab, All filter, Focus Mode on, no chat selected (the
+launch state; selecting a chat would send read receipts from a live account).
+One run per build; live traffic differs between windows and is reported.
+
+**Read footprint, not RSS.** On this 8 GB machine RSS leaves out compressed
+pages. The v0.3.0 install after 15 h of uptime showed app/core RSS of
+64/25 MB but a `footprint` of 114/152 MB. Budgets and claims use footprint.
+
+| Connected idle, 10 min after launch | Before (v0.3.1, `d6723dc`) | After | Budget |
+|---|---:|---:|---:|
+| App CPU (cumulative, 5 min) | 2.58% | PENDING | — |
+| Core CPU (cumulative, 5 min) | 7.29% | PENDING | — |
+| **Both, CPU** | **9.87%** | **PENDING** | ≤ 1% |
+| App `ps` %CPU avg · p95 · max | 2.12 · 11.6 · 69.5 | PENDING | — |
+| Core `ps` %CPU avg · p95 · max | 7.14 · 78.7 · 138.4 | PENDING | — |
+| App footprint | 49–52 MB | 47 MB | < 90 MB |
+| Core footprint | 94 MB | 45 MB | < 60 MB |
+| **Combined footprint** | **≈146 MB** | **92 MB** | < 150 MB |
+| App / core RSS | 55.0 / 61.2 MB (5-min avg) | 49.2 / 48.1 MB (first 51 s) | — |
+| Messages received in the window | 18 | — | — |
+
+The after run is incomplete: 55 s into its window the installed app was
+launched from `/Applications`, and its stale-core sweep stopped the measured
+core. The after footprints are the snapshot taken at 600 s, before that,
+in the same state as the before row (before: app 49 MB at 600 s, core
+94 MB at 700 s). That build predates two final edits with no memory effect:
+the v17 index predicate moving from `LIKE` to `substr` (identical plans)
+and the chat row's day input. The 5-minute CPU cells need a clean re-run;
+until then, the CPU evidence is the per-change measurements below. The
+before run's core figure is dominated by the post-launch burst of push-name
+events: over the v0.3.0 install's 15 h uptime the lifetime averages were
+app 2.8% and core 0.7%.
+
+### What the idle time was spent on
+
+- **Core — the name pass (~75% of core idle CPU).** Every push-name contact
+  event and every message from a still-unmapped `@lid` sender re-arms the
+  name-resolution pass; 8 passes ran in the 5.4-minute baseline window
+  (and 56–375 per day in `core.log`), each ~2.3 s. At steady state a pass
+  changes nothing, yet it full-scanned `messages` for `LIKE '%@lid'` and
+  issued two statements per known mapping in mirror and rewrite plus one
+  probe per mapping in merge (~23k statements). Fix: migration v17 adds a
+  partial covering index over the few hundred rows that still carry an `@lid`
+  sender; derive reads it with a pinned join order and a `message_id` probe;
+  rewrite/merge walk only the LIDs that still key a row or chat; mirror
+  snapshots contact names once and upserts only pairs that gain a field.
+- **Core — SQLite page caches.** `cache_size=-16000` was 16 MB per
+  connection across 1 writer + 4 readers, and modernc's allocator keeps
+  freed pages mapped, so a cache filled once stays in the footprint. Now
+  4 MB per connection.
+- **App — `focusMode` (24% of main-thread time).** It was `@AppStorage`
+  inside `AppState`; outside a view every read is a CFPreferences lookup
+  (with a debug log call), and `sortChats` read it in the comparator on
+  every `message.received`/`chat.updated`. Now a `@Published` copy that
+  writes the default in `didSet`.
+- **App — chat rows re-rendered on every event.** `ChatRow` held
+  `@EnvironmentObject`, so its `Equatable` gate never applied: all ~18
+  visible rows re-ran `body` on each `AppState` change. Rows now take plain
+  values (resolved preview, nick-color key, day) plus a plain reference for
+  actions. The list also stopped calling `isWorkChat` (a linear scan of all
+  chats) per row.
+
+### Per-change evidence
+
+**Name pass, storage share** — `BenchmarkNamesPassSteadyState`
+(`WW_BENCH_N=150000`; derive → mirror → rewrite → merge with nothing left to
+change; 40 groups, 0.3% unmapped `@lid` rows, 6,000 mappings, 7,000 contacts):
+
+| | ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| Before | 1,611,743,448 | 11,936,664 | 390,097 |
+| After | 17,783,849–20,284,833 | 4,889,744 | 79,592 |
+
+Live (`core.log`, same account): pass elapsed 2,166–2,423 ms before;
+175–290 ms after, with the derive stage 423–555 ms → 4–8 ms. A 90 s CPU
+profile of the patched core (diagnostic build, not shipped) shows 90 ms of
+name-pass CPU and 500 ms of total core CPU (0.56%). Migration v17 builds the
+index once at first launch: ~5.5 s on this DB.
+
+`EXPLAIN QUERY PLAN` (guarded by `TestLIDSenderQueriesUsePartialIndex`):
+
+```text
+derive:  MATERIALIZE lid_rows
+         SCAN messages USING COVERING INDEX idx_messages_lid_sender
+         SCAN lid_rows
+         SEARCH p USING INDEX idx_messages_msgid (message_id=?)
+         USE TEMP B-TREE FOR DISTINCT
+senders: SCAN messages USING COVERING INDEX idx_messages_lid_sender
+```
+
+Without the join hints the planner either scanned every row on the phone
+side or sought the autoindex on `chat_jid` alone (a whole group per LID row).
+The index's WHERE is `substr(sender_jid, -4) = '@lid'`, not the LIKE older
+builds query with, so their plans cannot change: on a copy of the real DB
+the v0.3.1 derive query keeps its exact plan with the v17 index present
+(381 ms, vs 416 ms without it; OS cache warm), while the new derive takes
+2.1 ms.
+
+**SQLite `cache_size`** — the app's request shapes replayed against a private
+copy of the real DB (60 chat pages, 5 FTS searches, inbox, derive; 3 rounds,
+OS cache warm; local probe, not committed). `libc bytes` is modernc's mapped
+allocator total after the run:
+
+| cache_size per connection | chat page p50 / p95 | search p50 / p95 | inbox | SQLite allocator |
+|---|---:|---:|---:|---:|
+| 16 MB (before) | 0.77 / 1.39 ms | 1.57 / 10.18 ms | 135 ms | 56.9 MB |
+| 8 MB | 0.77 / 1.37 ms | 1.49 / 10.73 ms | 135 ms | 38.9 MB |
+| **4 MB (after)** | 0.76 / 1.20 ms | 1.44 / 10.14 ms | 129 ms | **22.9 MB** |
+| 2 MB | 0.80 / 1.16 ms | 1.31 / 10.40 ms | 152 ms | 13.9 MB |
+
+The diagnostic core attributed its footprint 1–8 minutes after launch:
+Go runtime ~25 MB resident (heap objects 5–12 MB), SQLite allocator 51–53 MB
+at 16 MB caches.
+
+**App** — Instruments SwiftUI template attached to the Release app for 90 s
+in the idle state above (`xctrace record --template SwiftUI --attach`):
+
+| per 90 s | Before | After |
+|---|---:|---:|
+| `AppState`-driven update passes (RootView bodies) | 10 | 12 |
+| `ChatRow` bodies · time | 180 · 99.5 ms | 22 · 3.1 ms |
+| All view bodies · time | 696 · 168.5 ms | 681 · 21.4 ms |
+| `AppState.focusMode.getter` (inclusive) | 995 ms | 4 ms |
+| Main-thread CPU samples | 3,909 ms | 1,534 ms |
+| ≈ main-thread CPU per update pass | ~390 ms | ~130 ms |
+
+The remaining per-pass cost is inside SwiftUI's graph update and the Core
+Animation commit (list diff, layout), not app code.
+
+### Gates
+
+`go build ./... && go vet ./...`, `go test ./...` (144 passed),
+`go test -race` on app/whatsapp/storage/ipc (129 passed), 235 Debug Swift
+tests passed, Release app built universal (`x86_64 arm64`) with
+`0x10002(adhoc,runtime)` and passed `codesign --verify --deep --strict`.
+
+### Not measured / open
+
+- Chat-selected idle (transcript visible): `MessageList`, `MessageBubble`
+  and `ComposerBar` still observe all of `AppState`, so a visible transcript
+  re-renders on every event. Needs a run with a manually selected chat.
+- Long-run growth: the 15 h v0.3.0 app reached 114 MB footprint (52 MB at
+  27 min here). Not attributed yet; needs a MallocStackLogging run.
+- End-to-end 5-minute CPU for the after build (see above).
+- A long-idle core will still fill its 5 × 4 MB page caches; the 15 h
+  number with this build is not measured.

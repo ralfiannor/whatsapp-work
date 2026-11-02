@@ -8,6 +8,20 @@ The IPC contract may break until 1.0 — `/healthz` reports the running version.
 
 ## [Unreleased]
 
+### Changed
+
+- Lower idle CPU and memory on large accounts (measured on a 2018 Intel
+  MacBook Pro; see `docs/performance.md`, 2026-11-02):
+  - The core's background name pass no longer rescans every stored message
+    and re-issues thousands of no-op statements each time incoming traffic
+    re-arms it (2.3 s → ~0.2 s per pass). A one-time migration (v17) adds
+    a small index at first launch.
+  - SQLite page cache is 4 MB per connection instead of 16 MB; query
+    latency is unchanged on a 640k-message database.
+  - The chat list no longer looks up the stored Focus Mode setting for
+    every comparison while re-sorting, and unchanged rows no longer redraw
+    on every incoming event.
+
 ### Planned
 
 - Appearance preferences (themes, typography) and adaptive member panel.
