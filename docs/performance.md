@@ -740,8 +740,8 @@ tests passed, Release app built universal (`x86_64 arm64`) with
 ### Not measured / open
 
 - Chat-selected idle: measured in round 2 below.
-- Long-run growth: the 15 h v0.3.0 app reached 114 MB footprint (52 MB at
-  27 min here); see round 2.
+- Long-run growth: 3 h of this branch measured in round 2; a 15 h run is
+  still open (v0.3.0 reached 114 MB after 15 h).
 - A like-for-like end-to-end CPU comparison under similar traffic.
 - A long-idle core will still fill its 5 × 4 MB page caches; the 15 h
   number with this build is not measured.
@@ -813,4 +813,21 @@ with a few-ms read of the pending-items index. A usync rate-limit answer
 **GOGC.** `GOGC=50` was measured against the default on this branch: core
 footprint 42–46 MB vs 44–49 MB in comparable windows — no material gain, so
 the default stays.
+
+**Long run, 3 h.** This branch ran as the daily app for 3 hours with
+`MallocStackLogging=lite`, with `footprint` categories and `heap` snapshots
+at 30 min, 1 h, 2 h and 3 h. The logger's own storage ("performance tool
+data", 20 → 37 MB) is excluded from the app figures below:
+
+| Uptime | 30 min | 1 h | 2 h | 3 h |
+|---|---:|---:|---:|---:|
+| App footprint without logger data | ~50 MB | ~49 MB | ~53 MB | ~55 MB |
+| Malloc growth since 10 min | +0.2 MB | +1.0 MB | +2.5 MB | +2.8 MB |
+
+Growth slows over time (+1.5 MB of malloc in hour 2, +0.3 MB in hour 3),
+and it is mostly CoreText font and glyph caches plus CFData. One steady
+leak, small but real: AppKit `NSKeyValueDependency` objects and their
+block contexts gain ~540 per hour (~0.1 MB/h). This run cannot explain the
+v0.3.0 install's 114 MB after 15 h, which was measured on the old
+per-event re-render code. A 15 h run of this build is still open.
 
