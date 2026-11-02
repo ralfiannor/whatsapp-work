@@ -196,7 +196,7 @@ Envelope:
 | `chat.updated` | `{chat: Chat}` | chat row changed (preview, counters, name) |
 | `chat.removed` | `{jid}` | chat row dropped (LID thread folded into its phone twin) — purge stale copies |
 | `contacts.updated` | `{changed}` | contact name data actually changed (insert/rename, not a no-op re-upsert) — clients refresh their name maps |
-| `inbox.changed` | `{reason}` | work-inbox membership moved (done/snooze/star/chat work flag); refetch `/inbox` if visible |
+| `inbox.changed` | `{reason}` | work-inbox membership moved (done/snooze/star/chat work flag, or `snooze_expired` when a snooze deadline passes); refetch `/inbox` if visible |
 | `reaction.received` | `{message_rowid, chat_jid, reactor_jid, emoji}` | reaction added/removed (a `message.updated` with the full row follows) |
 | `media.updated` | `{message_rowid, chat_jid, media: Media}` | media state transition (downloading/downloaded/failed/evicted) |
 
@@ -263,5 +263,8 @@ Local state (server-side persistent, per message/chat):
 `done`/`star` on messages emit `message.updated` over the WebSocket; every
 work-state mutation also emits `inbox.changed`; chat flags emit `chat.updated`.
 Snooze deadlines are evaluated against server wall-clock at query time
-(`snoozed_until <= now`) — there are no core timers, so clients refresh
-`/inbox` periodically while their inbox view is visible.
+(`snoozed_until <= now`). The core keeps one timer for the next deadline and
+emits `inbox.changed` `{reason: "snooze_expired"}` when it passes, so clients
+need no `/inbox` polling. Go timers run late across system sleep, and events
+are not replayed after a reconnect: clients refetch a visible inbox on wake
+and on reconnect.

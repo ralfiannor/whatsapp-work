@@ -25,16 +25,10 @@ struct InboxView: View {
             // Fetch immediately on appear: the segmented control switches
             // tabs without going through showInbox() (⌘4), so the panel
             // itself must load its data — on the WHOLE panel, not the
-            // populated list, or a nil inbox spins forever. Snooze deadlines
-            // expire silently on the core (query-time rule, no timers): the
-            // slow loop resurfaces due conversations while the tab stays
-            // visible, Inbox Zero included.
+            // populated list, or a nil inbox spins forever. No refresh loop:
+            // the core emits inbox.changed when a snooze lapses, and
+            // AppState refetches on every inbox event, reconnect and wake.
             await state.refreshInbox()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                guard state.sidebarTab == .inbox else { return }
-                await state.refreshInbox()
-            }
         }
     }
 

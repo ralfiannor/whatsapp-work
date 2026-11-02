@@ -600,3 +600,45 @@ func TestPlaceholderUpgradeEmitsUpdate(t *testing.T) {
 		t.Fatalf("chat after upgrade: unread=%d preview=%q", c.UnreadCount, c.LastPreview)
 	}
 }
+
+// A lapsing snooze changes the inbox without any write: the core announces
+// it (inbox.changed / snooze_expired) so clients need no /inbox polling.
+func TestSnoozeExpiryEmitsInboxChanged(t *testing.T) {
+	a, _, d, st := newTestApp(t)
+	ctx := context.Background()
+	if err := st.EnsureChat(ctx, core.Chat{JID: alice, Kind: core.KindDirect, DisplayName: "Alice"}); err != nil {
+		t.Fatal(err)
+	}
+	sub := subscribe(t, d, 16)
+	until := time.Now().Unix() + 1
+	if err := a.SetChatSnooze(ctx, alice, until); err != nil {
+		t.Fatal(err)
+	}
+	reasons := []string{}
+	deadline := time.After(4 * time.Second)
+	for len(reasons) < 2 {
+		select {
+		case ev := <-sub:
+			if ev.Type != "inbox.changed" {
+				continue
+			}
+			reasons = append(reasons, ev.Data.(map[string]any)["reason"].(string))
+		case <-deadline:
+			t.Fatalf("inbox.changed reasons = %v, want chat_snooze then snooze_expired", reasons)
+		}
+	}
+	if reasons[0] != "chat_snooze" || reasons[1] != "snooze_expired" {
+		t.Fatalf("reasons = %v", reasons)
+	}
+	if time.Now().Unix() < until {
+		t.Fatal("snooze_expired fired before the deadline")
+	}
+	// Nothing left to wait for: no further wake.
+	select {
+	case ev := <-sub:
+		if ev.Type == "inbox.changed" {
+			t.Fatalf("unexpected extra inbox.changed: %+v", ev.Data)
+		}
+	case <-time.After(1500 * time.Millisecond):
+	}
+}

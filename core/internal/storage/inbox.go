@@ -25,6 +25,25 @@ func (s *Store) SetMessageDone(ctx context.Context, rowID int64, done bool) erro
 	})
 }
 
+// NextSnoozeExpiry is the earliest snooze deadline after nowTS across
+// pending items and conversations (0 when none). Expiry is a query-time
+// rule — nothing is written when a snooze lapses — so this is the moment
+// the inbox changes on its own. Reads the pending partial index (pending
+// rows only) and the small chats table.
+func (s *Store) NextSnoozeExpiry(ctx context.Context, nowTS int64) (int64, error) {
+	var next sql.NullInt64
+	if err := s.r.QueryRowContext(ctx, `
+		SELECT MIN(t) FROM (
+			SELECT MIN(snoozed_until) AS t FROM local_message_state
+			WHERE done = 0 AND snoozed_until > ?
+			UNION ALL
+			SELECT MIN(snoozed_until) FROM chats WHERE snoozed_until > ?)`,
+		nowTS, nowTS).Scan(&next); err != nil {
+		return 0, fmt.Errorf("storage: next snooze expiry: %w", err)
+	}
+	return next.Int64, nil
+}
+
 // SetMessageSnoozed hides a message from the inbox until untilTS (0 = clear).
 func (s *Store) SetMessageSnoozed(ctx context.Context, rowID int64, untilTS int64) error {
 	return s.upsertLocalState(ctx, rowID, func(set *localStateSet) { set.snoozed, set.snoozedSet = &untilTS, true })

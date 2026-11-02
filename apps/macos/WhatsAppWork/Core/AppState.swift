@@ -390,7 +390,12 @@ final class AppState: ObservableObject {
                     authoritativeEpoch: epoch
                 )
                 switch result {
-                case .succeeded: return .success
+                case .succeeded:
+                    // Inbox events missed while the socket was down (a snooze
+                    // lapsing, done/star elsewhere) never replay: refetch the
+                    // visible inbox with the chats.
+                    if self.sidebarTab == .inbox { self.scheduleInboxRefresh() }
+                    return .success
                 case .failed: return .chatFetchFailed
                 case .queued, .cancelled: return .cancelled
                 }
@@ -2880,6 +2885,9 @@ final class AppState: ObservableObject {
                 _ = await self?.runRecoveryPoll(now: Date())
             }
         }
+        // A fallback that no-ops while the WS is fresh: let macOS batch its
+        // wakeup with others instead of waking the CPU on the dot.
+        pollTimer?.tolerance = 5
     }
 
     @discardableResult
@@ -2919,6 +2927,9 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, let client = self.runtimeClient else { return }
                 _ = await self.refreshSession(client, includeChats: true, chatSource: .wake)
+                // The core's snooze-expiry timer runs late across system
+                // sleep; a visible inbox catches up here.
+                if self.sidebarTab == .inbox { self.scheduleInboxRefresh() }
             }
         }
     }

@@ -53,6 +53,11 @@ type App struct {
 	// progress payload never arrives (quiet-period fallback).
 	syncDoneTimer *time.Timer
 
+	// snoozeWake fires inbox.changed at the next snooze deadline; snoozeMu
+	// serializes re-arming so a stale deadline never replaces a newer one.
+	snoozeMu   sync.Mutex
+	snoozeWake *time.Timer
+
 	nameMu         sync.Mutex
 	nameResolveDue *time.Timer
 	groupPending   map[string]bool
@@ -159,6 +164,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.store.RecomputeUnreadCounters(ctx); err != nil {
 		a.log.Warn("app: unread counter recompute", "err", err)
 	}
+	a.armSnoozeWake()
 	go a.loop(ctx)
 	go func() {
 		t := time.NewTicker(60 * time.Second)
@@ -1464,6 +1470,41 @@ func (a *App) GroupMembers(ctx context.Context, groupJID string) ([]core.GroupMe
 // when its inbox tab is visible; the event is a hint, never a payload.
 func (a *App) emitInboxChanged(reason string) {
 	a.emit("inbox.changed", map[string]any{"reason": reason})
+	a.armSnoozeWake() // every inbox mutation may move the next deadline
+}
+
+// armSnoozeWake schedules one inbox.changed ("snooze_expired") for the next
+// snooze deadline. Expiry is a query-time rule — no write happens when a
+// snooze lapses — so without this the client had to poll /inbox to see a
+// conversation come back. Re-armed after every inbox mutation and on fire.
+func (a *App) armSnoozeWake() {
+	ctx := a.runCtx
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
+	a.snoozeMu.Lock()
+	defer a.snoozeMu.Unlock()
+	if a.snoozeWake != nil {
+		a.snoozeWake.Stop()
+		a.snoozeWake = nil
+	}
+	next, err := a.store.NextSnoozeExpiry(ctx, time.Now().Unix())
+	if err != nil {
+		a.log.Warn("app: next snooze expiry", "err", err)
+		return
+	}
+	if next == 0 {
+		return
+	}
+	// The inbox shows an item once snoozed_until <= now in whole seconds:
+	// fire just inside the deadline's second.
+	wait := time.Until(time.Unix(next, 0)) + 500*time.Millisecond
+	a.snoozeWake = time.AfterFunc(wait, func() {
+		if ctx.Err() != nil {
+			return // shut down: the dispatcher's channels are closed
+		}
+		a.emitInboxChanged("snooze_expired")
+	})
 }
 
 // Inbox assembles the actionable work inbox.
